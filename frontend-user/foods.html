@@ -6,6 +6,28 @@
     <title>美食 - 贵州红色旅游</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        .store-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:16px; }
+        .store-card { background:#fff; border-radius:var(--r); overflow:hidden; border:1px solid var(--border); transition:box-shadow .2s; position:relative; }
+        .store-card:hover { box-shadow:0 4px 16px rgba(0,0,0,.08); }
+        .store-card-main { display:flex; gap:14px; padding:16px; text-decoration:none; color:var(--text); }
+        .store-card-main img { width:88px; height:88px; border-radius:8px; object-fit:cover; flex-shrink:0; }
+        .store-card-info { flex:1; min-width:0; }
+        .store-card-info h3 { margin:0 0 6px; font-size:16px; }
+        .store-card-info p { margin:3px 0; font-size:13px; color:var(--text2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .hygiene-badge { background:#07c160; color:#fff; padding:1px 8px; border-radius:4px; font-size:12px; }
+        .paused-banner { background:#fff7e6; border-top:1px solid #ffe0a3; color:#ad6800; font-size:12px; padding:8px 16px; }
+        .paused-banner i { margin-right:4px; }
+        .store-card.is-paused .store-card-main { opacity:.65; }
+        .store-card.is-paused .store-card-main img { filter:grayscale(.6); }
+        .store-order-btn { width:calc(100% - 32px); margin:0 16px 16px; }
+        .btn-disabled { background:#d9d9d9 !important; color:#8c8c8c !important; cursor:not-allowed !important; border:none; }
+        .queue-chip { display:inline-flex; align-items:center; gap:4px; background:#fff1f0; color:var(--red); border:1px solid #ffccc7; border-radius:14px; padding:2px 10px; font-size:12px; font-weight:600; margin:4px 16px 0; }
+        .queue-chip.ready { background:#f6ffed; color:#389e0d; border-color:#b7eb8f; }
+        .sub-tabs { margin-bottom:18px; display:flex; gap:10px; }
+        .sub-tabs button { border:1px solid var(--border); background:#fff; padding:8px 20px; border-radius:20px; cursor:pointer; font-size:14px; }
+        .sub-tabs button.active { background:var(--red); color:#fff; border-color:var(--red); }
+    </style>
 </head>
 <body>
 <header class="header">
@@ -29,21 +51,37 @@
 
 <div class="container">
     <div class="section">
-        <div class="section-title"><span>美食列表</span></div>
-        <div class="filter-bar">
-            <select id="category" onchange="loadFoods(1)">
-                <option value="">全部分类</option>
-            </select>
-            <input type="text" id="keyword" placeholder="搜索美食..." onkeyup="if(event.key==='Enter')loadFoods(1)">
-            <select id="orderBy" onchange="loadFoods(1)">
-                <option value="">默认排序</option>
-                <option value="price">价格排序</option>
-                <option value="rating">评分排序</option>
-            </select>
-            <button class="btn btn-primary btn-sm" onclick="loadFoods(1)"><i class="fas fa-search"></i> 搜索</button>
+        <div class="section-title"><span>美食下单 · 门店自取</span></div>
+        <div class="sub-tabs">
+            <button id="tabBtnFood" class="active" onclick="switchView('food')"><i class="fas fa-utensils"></i> 美食</button>
+            <button id="tabBtnStore" onclick="switchView('store')"><i class="fas fa-store"></i> 门店取餐 <span id="queueBadge" style="display:none;background:var(--red);color:#fff;border-radius:10px;padding:0 7px;font-size:12px;margin-left:2px"></span></button>
         </div>
-        <div class="card-grid" id="foodList"></div>
-        <div class="pagination" id="pagination"></div>
+
+        <div id="viewFood">
+            <div class="filter-bar">
+                <select id="category" onchange="loadFoods(1)">
+                    <option value="">全部分类</option>
+                </select>
+                <input type="text" id="keyword" placeholder="搜索美食..." onkeyup="if(event.key==='Enter')loadFoods(1)">
+                <select id="orderBy" onchange="loadFoods(1)">
+                    <option value="">默认排序</option>
+                    <option value="price">价格排序</option>
+                    <option value="rating">评分排序</option>
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="loadFoods(1)"><i class="fas fa-search"></i> 搜索</button>
+            </div>
+            <div id="storeFilterBar" style="display:none;margin-bottom:12px;font-size:13px;color:var(--text2)"></div>
+            <div class="card-grid" id="foodList"></div>
+            <div class="pagination" id="pagination"></div>
+        </div>
+
+        <div id="viewStore" style="display:none">
+            <div class="filter-bar">
+                <input type="text" id="storeKeyword" placeholder="搜索门店名称/地址..." onkeyup="if(event.key==='Enter')loadStores()">
+                <button class="btn btn-primary btn-sm" onclick="loadStores()"><i class="fas fa-search"></i> 搜索</button>
+            </div>
+            <div class="store-grid" id="storeList"></div>
+        </div>
     </div>
 </div>
 
@@ -52,6 +90,9 @@
 <script src="js/common.js"></script>
 <script>
 let currentPage = 1, totalRecords = 0;
+let allStores = [], storeMap = {};
+let myQueueList = [];
+const filterStoreId = getParam('storeId');
 
 async function loadCategories() {
     const data = await api('/api/food/categories');
@@ -65,37 +106,128 @@ async function loadCategories() {
     });
 }
 
+async function loadAllStores(keyword) {
+    const url = '/api/food/stores' + (keyword ? '?keyword=' + encodeURIComponent(keyword) : '');
+    const data = await api(url);
+    allStores = Array.isArray(data) ? data : (data && (data.records || data.list)) || [];
+    storeMap = {};
+    allStores.forEach(s => { storeMap[s.id] = s; });
+    return allStores;
+}
+
+async function loadMyQueue() {
+    if (!getUser()) { myQueueList = []; return; }
+    const data = await api('/api/order/myQueue');
+    myQueueList = Array.isArray(data) ? data : [];
+    const badge = document.getElementById('queueBadge');
+    if (badge) {
+        const ready = myQueueList.filter(q => q.status === 'READY').length;
+        if (ready > 0) { badge.style.display = 'inline-block'; badge.textContent = ready + ' 单待取'; }
+        else if (myQueueList.length) { badge.style.display = 'inline-block'; badge.textContent = myQueueList.length; badge.style.background = '#faad14'; }
+        else { badge.style.display = 'none'; }
+    }
+}
+
+function queueOfStore(storeId) {
+    return myQueueList.filter(q => String(q.storeId) === String(storeId));
+}
+
+function switchView(view) {
+    const isStore = view === 'store';
+    document.getElementById('viewFood').style.display = isStore ? 'none' : '';
+    document.getElementById('viewStore').style.display = isStore ? '' : 'none';
+    document.getElementById('tabBtnFood').classList.toggle('active', !isStore);
+    document.getElementById('tabBtnStore').classList.toggle('active', isStore);
+    if (isStore) loadStores();
+}
+
 async function loadFoods(page) {
     currentPage = page;
     const category = document.getElementById('category').value;
     const keyword = document.getElementById('keyword').value.trim();
     const orderBy = document.getElementById('orderBy').value;
-    const data = await api('/api/food/list?page=' + page + '&size=9&category=' + encodeURIComponent(category) + '&keyword=' + encodeURIComponent(keyword) + '&orderBy=' + orderBy);
+    let url = '/api/food/list?page=' + page + '&size=9&category=' + encodeURIComponent(category) + '&keyword=' + encodeURIComponent(keyword) + '&orderBy=' + orderBy;
+    if (filterStoreId) url += '&storeId=' + filterStoreId;
+    if (!Object.keys(storeMap).length) await loadAllStores();
+    const data = await api(url);
     const el = document.getElementById('foodList');
     if (!data) { el.innerHTML = '<div class="empty"><i class="fas fa-utensils"></i><p>暂无数据</p></div>'; return; }
     const list = data.records || data.list || data;
     totalRecords = data.total || list.length;
+    const bar = document.getElementById('storeFilterBar');
+    if (filterStoreId && storeMap[filterStoreId]) {
+        bar.style.display = '';
+        bar.innerHTML = '当前门店：<b style="color:var(--text)">' + storeMap[filterStoreId].name + '</b> <a href="foods.html" style="color:var(--red);margin-left:8px">查看全部美食</a>';
+    } else { bar.style.display = 'none'; }
     if (!list.length) { el.innerHTML = '<div class="empty"><i class="fas fa-utensils"></i><p>暂无数据</p></div>'; document.getElementById('pagination').innerHTML = ''; return; }
-    el.innerHTML = list.map(f =>
-        '<a class="card" href="food-detail.html?id=' + f.id + '">' +
+    el.innerHTML = list.map(f => {
+        const store = f.storeId ? storeMap[f.storeId] : null;
+        const paused = store && store.orderPaused === 1;
+        return '<a class="card" href="food-detail.html?id=' + f.id + '" style="' + (paused ? 'position:relative' : '') + '">' +
             '<div class="card-img">' +
                 '<img src="' + API + (f.coverImage || '') + '" onerror="imgError(this)" alt="">' +
                 (f.category ? '<span class="card-tag">' + f.category + '</span>' : '') +
+                (paused ? '<span style="position:absolute;top:8px;right:8px;background:#faad14;color:#fff;font-size:12px;padding:2px 8px;border-radius:4px"><i class="fas fa-pause-circle"></i> 暂停接单</span>' : '') +
             '</div>' +
             '<div class="card-body">' +
                 '<h3>' + (f.name || '') + '</h3>' +
                 '<p>' + (f.description || f.intro || '') + '</p>' +
                 '<div class="card-meta">' +
                     '<span class="card-price">¥' + (f.price || 0) + '</span>' +
+                    (store ? '<span style="font-size:12px;color:var(--text2)"><i class="fas fa-store"></i> ' + store.name + '</span>' : '') +
                 '</div>' +
             '</div>' +
-        '</a>'
-    ).join('');
+        '</a>';
+    }).join('');
     renderPagination(document.getElementById('pagination'), currentPage, totalRecords, 9, 'loadFoods');
 }
 
+async function loadStores() {
+    const keyword = document.getElementById('storeKeyword').value.trim();
+    const [stores] = await Promise.all([loadAllStores(keyword), loadMyQueue()]);
+    const el = document.getElementById('storeList');
+    if (!stores.length) { el.innerHTML = '<div class="empty"><i class="fas fa-store"></i><p>暂无门店</p></div>'; return; }
+    el.innerHTML = stores.map(s => {
+        const paused = s.orderPaused === 1;
+        const servingPaused = s.servingPaused === 1;
+        const queues = queueOfStore(s.id);
+        const qHtml = queues.map(q => {
+            if (q.status === 'READY') {
+                return '<span class="queue-chip ready"><i class="fas fa-bell"></i> 取餐号 ' + q.queueNo + ' 已叫号，请尽快取餐</span>';
+            }
+            const pos = (q.aheadCount || 0) + 1;
+            const stage = q.status === 'MAKING' ? '制作中' : '排队中';
+            return '<span class="queue-chip"><i class="fas fa-list-ol"></i> 取餐号 ' + q.queueNo + ' · ' + stage + ' · 前方 ' + q.aheadCount + ' 单（第 ' + pos + ' 位）</span>';
+        }).join('');
+        const btn = paused
+            ? '<button class="btn btn-disabled store-order-btn" disabled><i class="fas fa-pause-circle"></i> 暂停接单中</button>'
+            : '<a class="btn btn-primary store-order-btn" href="foods.html?storeId=' + s.id + '#order"><i class="fas fa-shopping-cart"></i> 下单自取</a>';
+        return '<div class="store-card' + (paused ? ' is-paused' : '') + '">' +
+            '<a class="store-card-main" href="foods.html?storeId=' + s.id + '">' +
+                '<img src="' + (s.coverImage ? API + s.coverImage : '') + '" onerror="imgError(this)" alt="">' +
+                '<div class="store-card-info">' +
+                    '<h3>' + (s.name || '') + '</h3>' +
+                    '<p><i class="fas fa-map-marker-alt" style="color:var(--red)"></i> ' + (s.location || '-') + '</p>' +
+                    '<p><i class="fas fa-phone" style="color:var(--red)"></i> ' + (s.phone || '-') + '　<span class="hygiene-badge">卫生 ' + (s.hygieneLevel || '-') + '</span></p>' +
+                '</div>' +
+            '</a>' +
+            (qHtml ? '<div style="padding:6px 0 2px">' + qHtml + '</div>' : '') +
+            (paused
+                ? '<div class="paused-banner"><i class="fas fa-pause-circle"></i>暂停接单：' + (s.pauseReason || '门店繁忙') + '｜预计恢复：' + (s.resumeTime || '-') + '</div>'
+                : (servingPaused ? '<div class="paused-banner"><i class="fas fa-bell-slash"></i>门店临时停止出餐，已支付订单金额可正常申请退款</div>' : '')) +
+            btn +
+        '</div>';
+    }).join('');
+}
+
+// 门店取餐页每 15 秒刷新排队位置
+setInterval(() => {
+    if (document.getElementById('viewStore').style.display !== 'none') loadStores();
+}, 15000);
+
 loadCategories();
-loadFoods(1);
+if (getUser()) loadMyQueue();
+if (filterStoreId) loadAllStores().then(() => loadFoods(1)); else loadFoods(1);
 </script>
 </body>
 </html>

@@ -478,6 +478,29 @@ public class AdminController {
         return Result.success("删除成功", null);
     }
 
+    /** 门店忙时暂停接单，需注明恢复时段（可附原因） */
+    @GetMapping("/food/pauseStore")
+    public Result<String> pauseStore(@RequestParam Long id,
+                                      @RequestParam String resumeTime,
+                                      @RequestParam(required = false) String reason) {
+        foodService.pauseOrderTaking(id, reason, resumeTime);
+        return Result.success("已暂停接单", null);
+    }
+
+    /** 恢复接单 */
+    @GetMapping("/food/resumeStore")
+    public Result<String> resumeStore(@RequestParam Long id) {
+        foodService.resumeOrderTaking(id);
+        return Result.success("已恢复接单", null);
+    }
+
+    /** 临时停止出餐 / 恢复出餐；停止期间已支付金额保持可退 */
+    @GetMapping("/food/toggleServing")
+    public Result<String> toggleStoreServing(@RequestParam Long id, @RequestParam Integer paused) {
+        foodService.toggleServing(id, paused != null && paused == 1);
+        return Result.success(paused != null && paused == 1 ? "已停止出餐" : "已恢复出餐", null);
+    }
+
     // ==================== 留言管理 ====================
 
     @GetMapping("/comment/list")
@@ -517,37 +540,56 @@ public class AdminController {
         return Result.success(orderService.listAllOrders(page, size, orderType, status));
     }
 
+    /** 门店接单：排队中 -> 制作中 */
+    @GetMapping("/order/accept")
+    public Result<String> acceptOrder(@RequestParam Long orderId) {
+        orderService.acceptOrder(orderId);
+        return Result.success("已接单，进入制作中", null);
+    }
+
+    /** 出餐叫号：制作中 -> 待取餐 */
+    @GetMapping("/order/ready")
+    public Result<String> readyOrder(@RequestParam Long orderId) {
+        orderService.readyOrder(orderId);
+        return Result.success("已出餐，等待用户取餐", null);
+    }
+
+    /** 作废订单（如超时未取），必须注明原因 */
+    @GetMapping("/order/void")
+    public Result<String> voidOrder(@RequestParam Long orderId,
+                                     @RequestParam String reason) {
+        orderService.voidOrder(orderId, reason, "ADMIN");
+        return Result.success("订单已作废", null);
+    }
+
+    /** 订单状态流转记录 */
+    @GetMapping("/order/statusLog")
+    public Result<List<com.redtourism.entity.OrderStatusLog>> orderStatusLog(@RequestParam Long orderId) {
+        return Result.success(orderService.listStatusLogs(orderId, null));
+    }
+
     @GetMapping("/order/cancel")
     public Result<String> adminCancelOrder(@RequestParam Long orderId) {
-        OrderInfo order = orderService.getById(orderId);
-        if (order == null) return Result.error("订单不存在");
-        order.setStatus("CANCELLED");
-        orderService.updateById(order);
-        return Result.success("已取消");
+        orderService.adminCancelOrder(orderId);
+        return Result.success("已取消", null);
     }
 
     @GetMapping("/order/refund")
     public Result<String> adminRefundOrder(@RequestParam Long orderId) {
-        OrderInfo order = orderService.getById(orderId);
-        if (order == null) return Result.error("订单不存在");
-        order.setStatus("REFUNDED");
-        orderService.updateById(order);
-        return Result.success("已退款");
+        orderService.adminRefundOrder(orderId);
+        return Result.success("已退款", null);
     }
 
     @GetMapping("/order/complete")
     public Result<String> adminCompleteOrder(@RequestParam Long orderId) {
-        OrderInfo order = orderService.getById(orderId);
-        if (order == null) return Result.error("订单不存在");
-        order.setStatus("COMPLETED");
-        orderService.updateById(order);
-        return Result.success("已完成");
+        orderService.completeOrder(orderId);
+        return Result.success("已完成", null);
     }
 
     @GetMapping("/order/delete")
     public Result<String> adminDeleteOrder(@RequestParam Long orderId) {
         orderService.removeById(orderId);
-        return Result.success("已删除");
+        return Result.success("已删除", null);
     }
 
     // ==================== FAQ管理 ====================

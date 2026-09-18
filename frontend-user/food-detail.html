@@ -71,7 +71,10 @@
                         小计：<span id="subtotal">¥0</span>
                     </div>
                 </div>
-                <button class="btn btn-primary" onclick="buyFood()" style="font-size:16px;padding:12px 32px"><i class="fas fa-shopping-cart"></i> 立即购买</button>
+                <div id="orderPausedTip" style="display:none;background:#fff7e6;border:1px solid #ffe0a3;border-radius:var(--r);padding:12px 16px;margin-bottom:16px;color:#ad6800;font-size:14px">
+                    <i class="fas fa-pause-circle"></i> <span id="orderPausedText"></span>
+                </div>
+                <button class="btn btn-primary" id="buyBtn" onclick="buyFood()" style="font-size:16px;padding:12px 32px"><i class="fas fa-shopping-cart"></i> 立即购买（门店自取）</button>
             </div>
         </div>
         <div class="detail-sidebar">
@@ -144,7 +147,7 @@
 <script src="js/common.js"></script>
 <script>
 const foodId = getParam('id');
-let food = null, lastOrderId = null, payMethod = 'WECHAT';
+let food = null, store = null, lastOrderId = null, payMethod = 'WECHAT';
 
 if (!foodId) { location.href = 'foods.html'; }
 
@@ -180,7 +183,7 @@ async function loadDetail() {
 }
 
 async function loadStore(storeId) {
-    var store = await api('/api/food/storeDetail?id=' + storeId);
+    store = await api('/api/food/storeDetail?id=' + storeId);
     if (!store) return;
     document.getElementById('storeSection').style.display = 'block';
     document.getElementById('storeName').textContent = store.name || '';
@@ -189,11 +192,33 @@ async function loadStore(storeId) {
         storeEl.onerror = function(){ imgError(storeEl); };
         storeEl.src = store.coverImage ? (API + store.coverImage) : '';
     }
+    var servingTip = store.servingPaused === 1
+        ? '<br><span style="color:#ad6800;font-size:12px"><i class="fas fa-bell-slash"></i> 门店临时停止出餐，已支付金额可申请退款</span>' : '';
     document.getElementById('storeInfo').innerHTML =
         '<tr><td>地址</td><td><i class="fas fa-map-marker-alt" style="color:var(--red)"></i> ' + (store.location || '-') + '</td></tr>' +
         '<tr><td>电话</td><td><i class="fas fa-phone" style="color:var(--red)"></i> ' + (store.phone || '-') + '</td></tr>' +
         '<tr><td>分类</td><td>' + (store.category || '-') + '</td></tr>' +
-        '<tr><td>卫生等级</td><td><span style="background:#07c160;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">' + (store.hygieneLevel || '-') + '</span></td></tr>';
+        '<tr><td>卫生等级</td><td><span style="background:#07c160;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">' + (store.hygieneLevel || '-') + '</span>' + servingTip + '</td></tr>';
+    applyStoreOrderStatus();
+}
+
+// 暂停接单期间，餐品详情页下单入口置灰（与门店列表同步）
+function applyStoreOrderStatus() {
+    var paused = store && store.orderPaused === 1;
+    var tip = document.getElementById('orderPausedTip');
+    var btn = document.getElementById('buyBtn');
+    if (paused) {
+        tip.style.display = 'block';
+        document.getElementById('orderPausedText').innerHTML =
+            '门店「' + (store.name || '') + '」当前暂停接单：' + (store.pauseReason || '门店繁忙') +
+            '<br>预计恢复时段：<b>' + (store.resumeTime || '-') + '</b>';
+        btn.disabled = true;
+        btn.classList.add('btn-disabled');
+        btn.style.background = '#d9d9d9';
+        btn.style.color = '#8c8c8c';
+        btn.style.cursor = 'not-allowed';
+        btn.innerHTML = '<i class="fas fa-pause-circle"></i> 暂停接单中';
+    }
 }
 
 async function loadRelated(category) {
@@ -217,9 +242,15 @@ async function loadRelated(category) {
 
 async function buyFood() {
     if (!getUser()) { showToast('请先登录', 'error'); setTimeout(function(){ location.href = 'login.html'; }, 1000); return; }
+    if (store && store.orderPaused === 1) {
+        showToast('门店暂停接单中，预计恢复：' + (store.resumeTime || '待定'), 'error');
+        return;
+    }
     var qty = parseInt(document.getElementById('qty').value) || 1;
     var amount = (food.price || 0) * qty;
-    var data = await api('/api/order/create?orderType=FOOD&targetId=' + foodId + '&targetName=' + encodeURIComponent(food.name) + '&amount=' + amount + '&quantity=' + qty);
+    var url = '/api/order/create?orderType=FOOD&targetId=' + foodId + '&targetName=' + encodeURIComponent(food.name) + '&amount=' + amount + '&quantity=' + qty;
+    if (food.storeId) url += '&storeId=' + food.storeId;
+    var data = await api(url);
     if (data !== null) {
         lastOrderId = data.id || data;
         document.getElementById('payAmount').textContent = '¥' + amount.toFixed(2);
@@ -234,10 +265,17 @@ async function confirmPay() {
     if (!lastOrderId) return;
     var data = await api('/api/order/pay?orderId=' + lastOrderId + '&payMethod=' + payMethod);
     if (data !== null) {
+        var orderId = lastOrderId;
         lastOrderId = null;
         closePayModal();
-        showToast('支付成功！');
-        setTimeout(function(){ location.href = 'orders.html'; }, 1200);
+        // 查询排队号后提示，再跳转我的订单查看排队进度
+        var order = await api('/api/order/detail?id=' + orderId);
+        if (order && order.queueNo != null) {
+            showToast('支付成功！您的取餐号 ' + order.queueNo + '，已进入排队');
+        } else {
+            showToast('支付成功！');
+        }
+        setTimeout(function(){ location.href = 'orders.html'; }, 1500);
     }
 }
 

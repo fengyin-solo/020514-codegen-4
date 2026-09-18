@@ -119,16 +119,19 @@ docker compose up --build -d
 |------|------|
 | `GET /api/hotel/list?page=&size=&keyword=&orderBy=` | 酒店列表 |
 | `GET /api/hotel/detail?id=` | 酒店详情 |
-| `GET /api/food/list?page=&size=&category=&keyword=` | 美食列表 |
-| `GET /api/food/detail?id=` | 美食详情（含门店信息） |
+| `GET /api/food/list?page=&size=&category=&keyword=&orderBy=&storeId=` | 美食列表（可按门店过滤；orderBy=price 价格排序不受门店暂停影响） |
+| `GET /api/food/detail?id=` | 美食详情（含门店信息，门店返回 orderPaused/pauseReason/resumeTime/servingPaused） |
 
 ### 用户交互
 | 端点 | 说明 |
 |------|------|
-| `GET /api/order/create?orderType=&targetId=&targetName=&amount=&quantity=` | 创建订单 |
-| `GET /api/order/pay?orderId=&payMethod=` | 模拟支付（payMethod: WECHAT/BANK_ICBC/BANK_CCB/BANK_ABC/BANK_BOC/BANK_BOCOM/BANK_CMB/BANK_PSBC） |
-| `GET /api/order/cancel?orderId=` | 取消订单 |
-| `GET /api/order/refund?orderId=` | 申请退款 |
+| `GET /api/order/create?orderType=&targetId=&targetName=&amount=&quantity=&storeId=` | 创建订单（FOOD 自取单带 storeId，暂停接单门店会被拒绝） |
+| `GET /api/order/pay?orderId=&payMethod=` | 模拟支付（美食单支付完成后进入排队中，按门店当日生成取餐号） |
+| `GET /api/order/cancel?orderId=` | 取消订单（仅待支付） |
+| `GET /api/order/refund?orderId=` | 申请退款（排队中/制作中/待取餐/已作废但已支付均可退） |
+| `GET /api/order/pickup?orderId=` | 用户确认取餐（待取餐 → 已完成） |
+| `GET /api/order/statusLog?orderId=` | 订单状态流转记录（含每次变更时间与原因） |
+| `GET /api/order/myQueue` | 我的自取排队（门店、取餐号、前方等待单数、当前位置） |
 | `GET /api/order/myList?page=&size=` | 我的订单列表 |
 | `GET /api/favorite/add?targetType=&targetId=` | 收藏/取消收藏 |
 | `GET /api/favorite/list?targetType=` | 收藏列表 |
@@ -182,7 +185,10 @@ docker compose up --build -d
 | `GET /api/admin/hotel/*` | 酒店 CRUD |
 | `GET /api/admin/food/*` | 美食 CRUD |
 | `GET /api/admin/comment/*` | 留言管理（list/reply/delete） |
-| `GET /api/admin/order/*` | 订单管理（list/complete/cancel/refund/delete） |
+| `GET /api/admin/order/*` | 订单管理（list/accept 接单/ready 出餐叫号/void 作废/refund/complete/cancel/delete/statusLog） |
+| `GET /api/admin/food/pauseStore?id=&resumeTime=&reason=` | 门店暂停接单（必须注明恢复时段） |
+| `GET /api/admin/food/resumeStore?id=` | 门店恢复接单 |
+| `GET /api/admin/food/toggleServing?id=&paused=` | 临时停止/恢复出餐（停止期间已支付金额保持可退） |
 | `GET /api/admin/faq/*` | FAQ CRUD |
 | `GET /api/admin/feedback/*` | 反馈管理（list/reply/status/delete） |
 | `GET /api/admin/customRoute/list?status=` | 用户提交的线路审核列表 |
@@ -309,9 +315,26 @@ label-02051/
 
 ## 8. 支付说明（Mock 模式）
 
-支付为完整模拟流程，调用 `/api/order/pay` 即立即标记为已支付，无需真实扣款。
+### 美食自取排队状态流转
 
-支持以下支付方式（前端均有对应选项）：
+美食订单（orderType=FOOD）走门店自取排队流程，每次状态变化都会写入 `order_status_log` 并保留变更时间：
+
+```
+待支付 PENDING ──支付成功──▶ 排队中 QUEUING ──门店接单──▶ 制作中 MAKING ──出餐叫号──▶ 待取餐 READY ──用户确认取餐──▶ 已完成 COMPLETED
+                                  │                          │                          │
+                                  └──────────────┬───────────┴──────────────────────────┘
+                                                 ▼
+                                    已作废 VOID（必须注明原因，如超时未取；已支付可退款）
+```
+
+- **支付完成**：自动按「门店 + 当日」生成递增取餐号 `queue_no`，进入排队中，并推送排队确认消息。
+- **门店接单 / 出餐叫号**：管理端订单页操作，分别进入制作中、待取餐，叫号时推送取餐提醒。
+- **排队位置**：用户在「美食 → 门店取餐」标签页可看到每个进行中订单的取餐号、前方等待单数与当前排位；订单页每 15 秒自动刷新。
+- **暂停接单**：门店繁忙时可在管理端「美食管理 → 门店管理」暂停接单，必须填写预计恢复时段（可附原因）；暂停期间**门店列表与餐品详情页的下单入口同时置灰**，但门店卫生等级展示与美食价格排序不受影响。
+- **临时停止出餐**：标记后已支付订单（排队中/制作中/待取餐/已作废但已支付）金额始终可申请退款。
+- 非美食订单（景点/酒店/线路）仍保持原有 `待支付 → 已支付 → 已完成 / 已退款 / 已取消` 流程。
+
+### 支付方式
 
 | 方式代码 | 显示名称 |
 |---------|---------|

@@ -50,7 +50,11 @@
                         <option value="">全部状态</option>
                         <option value="PENDING">待支付</option>
                         <option value="PAID">已支付</option>
+                        <option value="QUEUING">排队中</option>
+                        <option value="MAKING">制作中</option>
+                        <option value="READY">待取餐</option>
                         <option value="COMPLETED">已完成</option>
+                        <option value="VOID">已作废</option>
                         <option value="CANCELLED">已取消</option>
                         <option value="REFUNDED">已退款</option>
                     </select>
@@ -78,7 +82,11 @@ let currentPage = 1;
 const statusMap = {
     'PENDING': { text: '待支付', cls: 'badge-warning' },
     'PAID': { text: '已支付', cls: 'badge-info' },
+    'QUEUING': { text: '排队中', cls: 'badge-warning' },
+    'MAKING': { text: '制作中', cls: 'badge-info' },
+    'READY': { text: '待取餐', cls: 'badge-success' },
     'COMPLETED': { text: '已完成', cls: 'badge-success' },
+    'VOID': { text: '已作废', cls: 'badge-default' },
     'CANCELLED': { text: '已取消', cls: 'badge-default' },
     'REFUNDED': { text: '已退款', cls: 'badge-danger' }
 };
@@ -105,26 +113,68 @@ async function loadData(page) {
     list.forEach(o => {
         const st = statusMap[o.status] || { text: o.status || '-', cls: 'badge-default' };
         const tp = typeMap[o.orderType] || o.orderType || '-';
+        let targetHtml = escHtml(o.targetName || '-');
+        if (o.orderType === 'FOOD' && o.queueNo != null) {
+            targetHtml += `<div style="margin-top:4px"><span class="badge badge-warning">取餐号 ${o.queueNo}</span></div>`;
+        }
+        let timeHtml = formatDate(o.createTime || o.createdAt);
+        if (o.status === 'VOID' && o.voidReason) {
+            timeHtml += `<div style="margin-top:4px;color:#ad6800;font-size:12px" title="${escHtml(o.voidReason)}"><i class="fas fa-ban"></i> ${escHtml(o.voidReason)}</div>`;
+        }
+        let actions = '';
+        if (o.orderType === 'FOOD') {
+            if (o.status === 'QUEUING') actions += `<button class="btn btn-sm btn-info" onclick="acceptOrder(${o.id})">接单</button>`;
+            if (o.status === 'MAKING') actions += `<button class="btn btn-sm btn-success" onclick="readyOrder(${o.id})">出餐叫号</button>`;
+            if (['QUEUING','MAKING','READY'].includes(o.status)) {
+                actions += `<button class="btn btn-sm btn-warning" onclick="voidOrder(${o.id})">作废</button>`;
+                actions += `<button class="btn btn-sm btn-danger" onclick="refundOrder(${o.id})">退款</button>`;
+            }
+            if (o.status === 'READY') actions += `<button class="btn btn-sm btn-success" onclick="completeOrder(${o.id})">完成</button>`;
+            if (o.status === 'VOID' && o.payTime) actions += `<button class="btn btn-sm btn-danger" onclick="refundOrder(${o.id})">退款</button>`;
+            if (o.status === 'PENDING') actions += `<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">取消</button>`;
+        } else {
+            if (o.status === 'PAID') actions += `<button class="btn btn-sm btn-success" onclick="completeOrder(${o.id})">完成</button><button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>`;
+            if (o.status === 'PENDING') actions += `<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">取消</button>`;
+        }
+        if (['CANCELLED','REFUNDED','COMPLETED','VOID'].includes(o.status)) {
+            actions += `<button class="btn btn-sm btn-default" onclick="deleteOrder(${o.id})">删除</button>`;
+        }
         h += `<tr>
             <td>${escHtml(o.orderNo || o.id)}</td>
             <td>${escHtml(o.username || '-')}</td>
             <td><span class="badge badge-info">${tp}</span></td>
-            <td>${escHtml(o.targetName || '-')}</td>
+            <td>${targetHtml}</td>
             <td style="font-weight:600;color:#C41A1A">¥${o.amount != null ? o.amount : '-'}</td>
             <td><span class="badge ${st.cls}">${st.text}</span></td>
             <td>${payMethodName(o.payMethod || o.payType)}</td>
-            <td>${formatDate(o.createTime || o.createdAt)}</td>
-            <td class="action-btns">
-                ${o.status === 'PAID' ? `<button class="btn btn-sm btn-success" onclick="completeOrder(${o.id})">完成</button><button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>` : ''}
-                ${o.status === 'PENDING' ? `<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">取消</button>` : ''}
-                ${o.status === 'CANCELLED' || o.status === 'REFUNDED' || o.status === 'COMPLETED' ? `<button class="btn btn-sm btn-default" onclick="deleteOrder(${o.id})">删除</button>` : ''}
-            </td>
+            <td>${timeHtml}</td>
+            <td class="action-btns">${actions}</td>
         </tr>`;
     });
     document.getElementById('tableBody').innerHTML = h;
     renderPagination('pagination', currentPage, total, 'loadData');
 }
 
+function acceptOrder(id) {
+    showConfirm('确认接单？接单后订单将进入「制作中」。', async () => {
+        var d = await api('/api/admin/order/accept?orderId=' + id);
+        if (d !== null) { showToast('已接单'); loadData(currentPage); }
+    });
+}
+function readyOrder(id) {
+    showConfirm('确认出餐并叫号？用户将收到待取餐通知。', async () => {
+        var d = await api('/api/admin/order/ready?orderId=' + id);
+        if (d !== null) { showToast('已出餐叫号'); loadData(currentPage); }
+    });
+}
+function voidOrder(id) {
+    const reason = window.prompt('请填写作废原因（必填，如：超时未取/门店临时停止出餐）：', '超时未取，用户未在规定时间内取餐');
+    if (reason === null) return;
+    if (!reason.trim()) { showToast('作废原因不能为空', 'warning'); return; }
+    api('/api/admin/order/void?orderId=' + id + '&reason=' + encodeURIComponent(reason.trim())).then(d => {
+        if (d !== null) { showToast('订单已作废'); loadData(currentPage); }
+    });
+}
 function completeOrder(id) {
     showConfirm('确定将此订单标记为已完成？', async () => {
         var d = await api('/api/admin/order/complete?orderId=' + id);

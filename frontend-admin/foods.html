@@ -66,8 +66,8 @@
                     </div>
                     <div class="table-wrapper">
                         <table>
-                            <thead><tr><th>ID</th><th>封面</th><th>名称</th><th>地址</th><th>分类</th><th>卫生等级</th><th>电话</th><th>操作</th></tr></thead>
-                            <tbody id="storeBody"><tr><td colspan="8" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr></tbody>
+                            <thead><tr><th>ID</th><th>封面</th><th>名称</th><th>地址</th><th>分类</th><th>卫生等级</th><th>电话</th><th>接单状态</th><th>操作</th></tr></thead>
+                            <tbody id="storeBody"><tr><td colspan="9" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr></tbody>
                         </table>
                     </div>
                     <div class="pagination" id="storePagination"></div>
@@ -150,22 +150,28 @@ function switchTab(tab) {
     document.getElementById('tabStore').classList.toggle('active', tab === 'store');
 }
 
-async function loadStores(page) {
-    storePage = page || 1;
-    document.getElementById('storeBody').innerHTML = '<tr><td colspan="8" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
-    const data = await api(`/api/food/stores?page=${storePage}&size=10`);
-    if (!data) { document.getElementById('storeBody').innerHTML = '<tr><td colspan="8" class="empty-state">加载失败</td></tr>'; return; }
+async function loadStores() {
+    document.getElementById('storeBody').innerHTML = '<tr><td colspan="9" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
+    const data = await api('/api/food/stores');
+    if (!data) { document.getElementById('storeBody').innerHTML = '<tr><td colspan="9" class="empty-state">加载失败</td></tr>'; return; }
 
     const list = data.records || data.list || data || [];
     stores = Array.isArray(data) ? data : list;
-    const total = data.pages || data.totalPages || Math.ceil((data.total || list.length) / 10);
     updateStoreSelect();
 
-    if (!list.length) { document.getElementById('storeBody').innerHTML = '<tr><td colspan="8" class="empty-state"><i class="fas fa-inbox"></i> 暂无数据</td></tr>'; document.getElementById('storePagination').innerHTML = ''; return; }
+    if (!list.length) { document.getElementById('storeBody').innerHTML = '<tr><td colspan="9" class="empty-state"><i class="fas fa-inbox"></i> 暂无数据</td></tr>'; document.getElementById('storePagination').innerHTML = ''; return; }
 
     let h = '';
     list.forEach(s => {
         const cover = s.coverImage ? `<img src="${imgSrc(s.coverImage)}" class="img-preview" onerror="imgError(this)">` : '-';
+        let statusHtml = '<span class="badge badge-success">接单中</span>';
+        if (s.orderPaused === 1) {
+            statusHtml = `<span class="badge badge-warning" title="原因：${escHtml(s.pauseReason||'')}&#10;恢复：${escHtml(s.resumeTime||'')}">暂停接单</span>` +
+                `<div style="font-size:12px;color:#ad6800;margin-top:3px">恢复：${escHtml(s.resumeTime || '-')}</div>`;
+        }
+        if (s.servingPaused === 1) {
+            statusHtml += `<div style="font-size:12px;color:#cf1322;margin-top:3px"><i class="fas fa-bell-slash"></i> 停止出餐</div>`;
+        }
         h += `<tr>
             <td>${s.id}</td>
             <td>${cover}</td>
@@ -174,14 +180,43 @@ async function loadStores(page) {
             <td>${escHtml(s.category || '-')}</td>
             <td>${escHtml(s.hygieneLevel || '-')}</td>
             <td>${escHtml(s.phone || '-')}</td>
-            <td class="action-btns">
-                <button class="btn btn-sm btn-info" onclick="editStore(${s.id})"><i class="fas fa-edit"></i></button>
-                <button class="btn btn-sm btn-danger" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button>
+            <td>${statusHtml}</td>
+            <td class="action-btns" style="white-space:nowrap">
+                <button class="btn btn-sm btn-info" title="编辑" onclick="editStore(${s.id})"><i class="fas fa-edit"></i></button>` +
+                (s.orderPaused === 1
+                    ? `<button class="btn btn-sm btn-success" title="恢复接单" onclick="resumeStore(${s.id})"><i class="fas fa-play"></i></button>`
+                    : `<button class="btn btn-sm btn-warning" title="暂停接单" onclick="pauseStore(${s.id})"><i class="fas fa-pause"></i></button>`) +
+                `<button class="btn btn-sm ${s.servingPaused === 1 ? 'btn-success' : 'btn-danger'}" title="${s.servingPaused === 1 ? '恢复出餐' : '临时停止出餐（已支付可退）'}" onclick="toggleServing(${s.id}, ${s.servingPaused === 1 ? 0 : 1})"><i class="fas fa-bell${s.servingPaused === 1 ? '' : '-slash'}"></i></button>
+                <button class="btn btn-sm btn-danger" title="删除" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button>
             </td>
         </tr>`;
     });
     document.getElementById('storeBody').innerHTML = h;
-    renderPagination('storePagination', storePage, total, 'loadStores');
+    document.getElementById('storePagination').innerHTML = '';
+}
+
+function pauseStore(id) {
+    const resumeTime = window.prompt('请填写预计恢复接单时段（必填，如：今天 17:30 / 2026-09-19 10:00）：');
+    if (resumeTime === null) return;
+    if (!resumeTime.trim()) { showToast('恢复时段不能为空', 'warning'); return; }
+    const reason = window.prompt('请填写暂停原因（可留空，默认"门店繁忙"）：', '门店繁忙');
+    if (reason === null) return;
+    let url = '/api/admin/food/pauseStore?id=' + id + '&resumeTime=' + encodeURIComponent(resumeTime.trim());
+    if (reason.trim()) url += '&reason=' + encodeURIComponent(reason.trim());
+    api(url).then(d => { if (d !== null) { showToast('已暂停接单'); loadStores(); } });
+}
+
+async function resumeStore(id) {
+    const d = await api('/api/admin/food/resumeStore?id=' + id);
+    if (d !== null) { showToast('已恢复接单'); loadStores(); }
+}
+
+function toggleServing(id, paused) {
+    const tip = paused === 1 ? '确认临时停止出餐？停止期间已支付订单金额保持可退。' : '确认恢复出餐？';
+    showConfirm(tip, async () => {
+        const d = await api('/api/admin/food/toggleServing?id=' + id + '&paused=' + paused);
+        if (d !== null) { showToast('操作成功'); loadStores(); }
+    });
 }
 
 function updateStoreSelect() {
@@ -285,7 +320,7 @@ function openStoreModal(item) {
 function closeStoreModal() { document.getElementById('storeModal').classList.remove('active'); }
 
 async function editStore(id) {
-    const data = await api('/api/food/store/detail?id=' + id);
+    const data = await api('/api/food/storeDetail?id=' + id);
     if (data) openStoreModal(data);
 }
 
@@ -303,14 +338,14 @@ async function saveStore() {
     const id = document.getElementById('fsId').value;
     if (id) fields.id = id;
     const params = Object.entries(fields).filter(([,v]) => v !== '').map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const data = await api('/api/admin/food/store/save?' + params);
-    if (data !== null) { showToast('保存成功'); closeStoreModal(); loadStores(storePage); }
+    const data = await api('/api/admin/food/saveStore?' + params);
+    if (data !== null) { showToast('保存成功'); closeStoreModal(); loadStores(); }
 }
 
 function deleteStore(id) {
     showConfirm('确定要删除该门店吗？', async () => {
-        const data = await api('/api/admin/food/store/delete?id=' + id);
-        if (data !== null) { showToast('删除成功'); loadStores(storePage); }
+        const data = await api('/api/admin/food/deleteStore?id=' + id);
+        if (data !== null) { showToast('删除成功'); loadStores(); }
     });
 }
 

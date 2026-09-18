@@ -160,6 +160,10 @@ CREATE TABLE IF NOT EXISTS food_store (
     cover_image VARCHAR(255),
     longitude DOUBLE,
     latitude DOUBLE,
+    order_paused TINYINT DEFAULT 0 COMMENT '是否暂停接单：0正常 1暂停',
+    pause_reason VARCHAR(255) COMMENT '暂停接单原因',
+    resume_time VARCHAR(100) COMMENT '预计恢复接单时段',
+    serving_paused TINYINT DEFAULT 0 COMMENT '是否临时停止出餐：0正常 1停止（已支付金额可退）',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -210,10 +214,31 @@ CREATE TABLE IF NOT EXISTS order_info (
     quantity INT DEFAULT 1,
     check_in_date DATE,
     check_out_date DATE,
+    store_id BIGINT COMMENT '自取门店ID（FOOD订单）',
+    queue_no INT COMMENT '自取排队号（按门店当日递增）',
+    queue_date DATE COMMENT '排队号所属日期',
+    accept_time DATETIME COMMENT '门店接单时间（进入制作中）',
+    ready_time DATETIME COMMENT '出餐叫号时间（进入待取餐）',
+    complete_time DATETIME COMMENT '用户确认取餐时间（已完成）',
+    void_time DATETIME COMMENT '作废时间',
+    void_reason VARCHAR(255) COMMENT '作废原因（如超时未取）',
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user (user_id),
-    INDEX idx_order_no (order_no)
+    INDEX idx_order_no (order_no),
+    INDEX idx_store_queue (store_id, queue_date, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 自取订单状态流转记录（每次状态变化保留变更时间）
+CREATE TABLE IF NOT EXISTS order_status_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_id BIGINT NOT NULL,
+    from_status VARCHAR(20),
+    to_status VARCHAR(20) NOT NULL,
+    change_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    remark VARCHAR(255),
+    operator VARCHAR(50) COMMENT '触发者：USER/STORE/ADMIN',
+    INDEX idx_order (order_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS message (

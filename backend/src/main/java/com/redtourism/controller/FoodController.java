@@ -22,8 +22,9 @@ public class FoodController {
                                      @RequestParam(defaultValue = "10") int size,
                                      @RequestParam(required = false) String category,
                                      @RequestParam(required = false) String keyword,
-                                     @RequestParam(required = false) String orderBy) {
-        return Result.success(foodService.listFoods(page, size, category, keyword, orderBy));
+                                     @RequestParam(required = false) String orderBy,
+                                     @RequestParam(required = false) Long storeId) {
+        return Result.success(foodService.listFoods(page, size, category, keyword, orderBy, storeId));
     }
 
     @GetMapping("/detail")

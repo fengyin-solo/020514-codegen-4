@@ -23,14 +23,23 @@ public class FoodServiceImpl extends ServiceImpl<FoodMapper, Food> implements Fo
 
     @Override
     public IPage<Food> listFoods(int page, int size, String category, String keyword, String orderBy) {
+        return listFoods(page, size, category, keyword, orderBy, null);
+    }
+
+    @Override
+    public IPage<Food> listFoods(int page, int size, String category, String keyword, String orderBy, Long storeId) {
         LambdaQueryWrapper<Food> wrapper = new LambdaQueryWrapper<>();
         if (StringUtils.hasText(category)) {
             wrapper.eq(Food::getCategory, category);
+        }
+        if (storeId != null) {
+            wrapper.eq(Food::getStoreId, storeId);
         }
         if (StringUtils.hasText(keyword)) {
             wrapper.and(w -> w.like(Food::getName, keyword)
                     .or().like(Food::getDescription, keyword));
         }
+        // 暂停接单只影响下单入口，不影响价格排序等列表逻辑
         if ("price".equals(orderBy)) {
             wrapper.orderByAsc(Food::getPrice);
         } else {
@@ -71,5 +80,42 @@ public class FoodServiceImpl extends ServiceImpl<FoodMapper, Food> implements Fo
     @Override
     public boolean deleteStore(Long id) {
         return foodStoreMapper.deleteById(id) > 0;
+    }
+
+    @Override
+    public boolean pauseOrderTaking(Long storeId, String reason, String resumeTime) {
+        FoodStore store = foodStoreMapper.selectById(storeId);
+        if (store == null) {
+            throw new RuntimeException("门店不存在");
+        }
+        if (!StringUtils.hasText(resumeTime)) {
+            throw new RuntimeException("暂停接单必须注明恢复时段");
+        }
+        store.setOrderPaused(1);
+        store.setPauseReason(StringUtils.hasText(reason) ? reason : "门店繁忙，暂停接单");
+        store.setResumeTime(resumeTime);
+        return foodStoreMapper.updateById(store) > 0;
+    }
+
+    @Override
+    public boolean resumeOrderTaking(Long storeId) {
+        FoodStore store = foodStoreMapper.selectById(storeId);
+        if (store == null) {
+            throw new RuntimeException("门店不存在");
+        }
+        store.setOrderPaused(0);
+        store.setPauseReason(null);
+        store.setResumeTime(null);
+        return foodStoreMapper.updateById(store) > 0;
+    }
+
+    @Override
+    public boolean toggleServing(Long storeId, boolean paused) {
+        FoodStore store = foodStoreMapper.selectById(storeId);
+        if (store == null) {
+            throw new RuntimeException("门店不存在");
+        }
+        store.setServingPaused(paused ? 1 : 0);
+        return foodStoreMapper.updateById(store) > 0;
     }
 }
