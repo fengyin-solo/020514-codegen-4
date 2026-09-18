@@ -54,15 +54,21 @@
                         <div style="flex:1">
                             <h4 id="storeName" style="margin:0 0 8px 0"></h4>
                             <table class="info-table" id="storeInfo" style="margin:0"></table>
+                            <div id="storeQueueBox" style="margin-top:10px;font-size:13px;color:var(--red)"></div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <div id="pauseBanner" style="display:none;margin-top:20px;background:#f4f4f5;border:1px solid #dddfe2;border-radius:var(--r);padding:16px 18px;color:#5f6368">
+                <div style="font-weight:700;font-size:15px;margin-bottom:6px"><i class="fas fa-pause-circle" style="color:#8a8f96"></i> 该门店当前暂停接单</div>
+                <div id="pauseBannerReason" style="font-size:13.5px;line-height:1.7"></div>
+            </div>
+
             <div style="margin-top:32px;padding-top:24px;border-top:1px solid var(--border)">
-                <h3 style="margin-bottom:16px">数量选择</h3>
+                <h3 style="margin-bottom:16px">数量选择（门店自取）</h3>
                 <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px">
-                    <div style="display:flex;align-items:center;border:1px solid var(--border);border-radius:var(--r)">
+                    <div style="display:flex;align-items:center;border:1px solid var(--border);border-radius:var(--r)" id="qtyGroup">
                         <button onclick="changeQty(-1)" style="width:36px;height:36px;border:none;background:none;cursor:pointer;font-size:18px">−</button>
                         <input type="number" id="qty" value="1" min="1" max="99" style="width:50px;text-align:center;border:none;border-left:1px solid var(--border);border-right:1px solid var(--border);height:36px;font-size:16px">
                         <button onclick="changeQty(1)" style="width:36px;height:36px;border:none;background:none;cursor:pointer;font-size:18px">+</button>
@@ -71,7 +77,7 @@
                         小计：<span id="subtotal">¥0</span>
                     </div>
                 </div>
-                <button class="btn btn-primary" onclick="buyFood()" style="font-size:16px;padding:12px 32px"><i class="fas fa-shopping-cart"></i> 立即购买</button>
+                <button class="btn btn-primary" id="buyBtn" onclick="buyFood()" style="font-size:16px;padding:12px 32px"><i class="fas fa-shopping-cart"></i> 立即购买</button>
             </div>
         </div>
         <div class="detail-sidebar">
@@ -135,6 +141,7 @@
             </div>
         </div>
         <button class="btn btn-primary" style="width:100%" onclick="confirmPay()">确认支付（模拟）</button>
+        <div id="paySuccessTip" style="display:none;margin-top:14px;background:#fff5f5;border:1px solid #ffd9d9;border-radius:8px;padding:10px 12px;font-size:13px;color:var(--red);text-align:center"></div>
         <div style="text-align:center;margin-top:12px"><a href="orders.html" style="color:var(--text2);font-size:13px">稍后支付 →</a></div>
     </div>
 </div>
@@ -177,6 +184,37 @@ async function loadDetail() {
     updateSubtotal();
     if (food.storeId) loadStore(food.storeId);
     if (food.category) loadRelated(food.category);
+    applyPauseState();
+}
+
+/* 门店暂停接单时：下单按钮与数量选择同时置灰（卫生等级、价格不受影响） */
+function applyPauseState() {
+    var paused = food && food.storeOrderPaused === 1;
+    var banner = document.getElementById('pauseBanner');
+    var btn = document.getElementById('buyBtn');
+    var qtyGroup = document.getElementById('qtyGroup');
+    if (paused) {
+        banner.style.display = 'block';
+        document.getElementById('pauseBannerReason').innerHTML =
+            '<i class="fas fa-info-circle"></i> ' + (food.pauseReason ? food.pauseReason : '门店忙碌，暂时无法接单') +
+            (food.resumeTime ? '<br><i class="far fa-clock"></i> 预计恢复时间：' + formatDate(food.resumeTime) : '');
+        btn.disabled = true;
+        btn.style.background = '#d5d7db';
+        btn.style.color = '#8a8f96';
+        btn.style.cursor = 'not-allowed';
+        btn.innerHTML = '<i class="fas fa-ban"></i> 暂停接单，暂不可下单';
+        qtyGroup.style.opacity = '.55';
+        qtyGroup.style.pointerEvents = 'none';
+    } else {
+        banner.style.display = 'none';
+        btn.disabled = false;
+        btn.style.background = '';
+        btn.style.color = '';
+        btn.style.cursor = '';
+        btn.innerHTML = '<i class="fas fa-shopping-cart"></i> 立即购买';
+        qtyGroup.style.opacity = '';
+        qtyGroup.style.pointerEvents = '';
+    }
 }
 
 async function loadStore(storeId) {
@@ -194,6 +232,20 @@ async function loadStore(storeId) {
         '<tr><td>电话</td><td><i class="fas fa-phone" style="color:var(--red)"></i> ' + (store.phone || '-') + '</td></tr>' +
         '<tr><td>分类</td><td>' + (store.category || '-') + '</td></tr>' +
         '<tr><td>卫生等级</td><td><span style="background:#07c160;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">' + (store.hygieneLevel || '-') + '</span></td></tr>';
+    if (getUser()) loadStoreQueue(storeId);
+}
+
+async function loadStoreQueue(storeId) {
+    var q = await api('/api/food/storeQueue?storeId=' + storeId);
+    var box = document.getElementById('storeQueueBox');
+    if (!q || !box) return;
+    var html = '<i class="fas fa-user-clock"></i> 当前排队 ' + (q.waitingCount || 0) + ' 单，待取餐 ' + (q.readyCount || 0) + ' 份';
+    if (q.currentCallingNo) html += ' · 最新叫号 <b>' + q.currentCallingNo + '</b> 号';
+    if (q.myQueue) {
+        if (q.myQueue.status === 'READY') html += '<br><i class="fas fa-bell"></i> 您的 ' + q.myQueue.queueNo + ' 号已叫号，请尽快取餐';
+        else html += '<br><i class="fas fa-list-ol"></i> 我的号 ' + q.myQueue.queueNo + '，前面还有 ' + ((q.myQueue.position || 1) - 1) + ' 单';
+    }
+    box.innerHTML = html;
 }
 
 async function loadRelated(category) {
@@ -217,12 +269,14 @@ async function loadRelated(category) {
 
 async function buyFood() {
     if (!getUser()) { showToast('请先登录', 'error'); setTimeout(function(){ location.href = 'login.html'; }, 1000); return; }
+    if (food && food.storeOrderPaused === 1) { showToast('门店暂停接单中，暂无法下单', 'warning'); return; }
     var qty = parseInt(document.getElementById('qty').value) || 1;
     var amount = (food.price || 0) * qty;
     var data = await api('/api/order/create?orderType=FOOD&targetId=' + foodId + '&targetName=' + encodeURIComponent(food.name) + '&amount=' + amount + '&quantity=' + qty);
     if (data !== null) {
         lastOrderId = data.id || data;
         document.getElementById('payAmount').textContent = '¥' + amount.toFixed(2);
+        document.getElementById('paySuccessTip').style.display = 'none';
         document.getElementById('payModal').classList.add('show');
     }
 }
@@ -234,10 +288,17 @@ async function confirmPay() {
     if (!lastOrderId) return;
     var data = await api('/api/order/pay?orderId=' + lastOrderId + '&payMethod=' + payMethod);
     if (data !== null) {
-        lastOrderId = null;
-        closePayModal();
-        showToast('支付成功！');
-        setTimeout(function(){ location.href = 'orders.html'; }, 1200);
+        // 支付完成进入排队：展示排队号，稍后跳订单页查看实时位置
+        var detail = await api('/api/order/detail?id=' + lastOrderId);
+        var tip = document.getElementById('paySuccessTip');
+        tip.style.display = 'block';
+        if (detail && detail.queueNo) {
+            tip.innerHTML = '<i class="fas fa-check-circle"></i> 支付成功！您的自取排队号为 <b style="font-size:16px">' + detail.queueNo + '</b>，正在排队中...';
+        } else {
+            tip.innerHTML = '<i class="fas fa-check-circle"></i> 支付成功！';
+        }
+        showToast('支付成功，已进入排队');
+        setTimeout(function(){ location.href = 'orders.html'; }, 2000);
     }
 }
 

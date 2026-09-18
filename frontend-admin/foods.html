@@ -66,7 +66,7 @@
                     </div>
                     <div class="table-wrapper">
                         <table>
-                            <thead><tr><th>ID</th><th>封面</th><th>名称</th><th>地址</th><th>分类</th><th>卫生等级</th><th>电话</th><th>操作</th></tr></thead>
+                            <thead><tr><th>ID</th><th>封面</th><th>名称</th><th>地址</th><th>分类</th><th>卫生等级</th><th>接单状态</th><th>操作</th></tr></thead>
                             <tbody id="storeBody"><tr><td colspan="8" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr></tbody>
                         </table>
                     </div>
@@ -136,6 +136,32 @@
     </div>
 </div>
 
+<div class="modal-overlay" id="pauseModal">
+    <div class="modal">
+        <div class="modal-header"><h3><i class="fas fa-pause-circle" style="color:#8a8f96"></i> 暂停接单</h3><button class="modal-close" onclick="closePauseModal()">&times;</button></div>
+        <div class="modal-body">
+            <input type="hidden" id="psId">
+            <div class="form-group"><label>门店</label><input class="form-control" id="psName" disabled></div>
+            <div class="form-group">
+                <label>暂停原因 <span style="color:var(--red,#C41A1A)">*</span></label>
+                <textarea class="form-control" id="psReason" rows="2" placeholder="如：午市高峰备餐中、食材售罄等"></textarea>
+            </div>
+            <div class="form-group">
+                <label>预计恢复接单时间</label>
+                <input class="form-control" id="psResumeTime" type="datetime-local">
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="psVoidActive"> 同时作废该门店在制订单（排队中/制作中）</label>
+                <div style="font-size:12px;color:#999;margin-top:4px">适用于临时停止出餐。作废后用户已支付金额保持可退，系统自动通知。</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" onclick="closePauseModal()">取消</button>
+            <button class="btn btn-warning" onclick="submitPause()"><i class="fas fa-pause"></i> 确认暂停</button>
+        </div>
+    </div>
+</div>
+
 <script src="js/admin-common.js"></script>
 <script>
 if (!requireAdmin()) throw '';
@@ -166,22 +192,69 @@ async function loadStores(page) {
     let h = '';
     list.forEach(s => {
         const cover = s.coverImage ? `<img src="${imgSrc(s.coverImage)}" class="img-preview" onerror="imgError(this)">` : '-';
-        h += `<tr>
+        const paused = s.orderPaused === 1;
+        const statusHtml = paused
+            ? `<span class="badge badge-default"><i class="fas fa-pause-circle"></i> 暂停中</span>` +
+              (s.resumeTime ? `<div style="font-size:12px;color:#999;margin-top:3px">恢复：${formatDate(s.resumeTime)}</div>` : '') +
+              (s.pauseReason ? `<div style="font-size:12px;color:#999;margin-top:2px" title="${escHtml(s.pauseReason)}"><i class="fas fa-comment-dots"></i> ${escHtml(s.pauseReason)}</div>` : '')
+            : `<span class="badge badge-success"><i class="fas fa-check-circle"></i> 接单中</span>`;
+        h += `<tr${paused ? ' style="background:#fafafa"' : ''}>
             <td>${s.id}</td>
             <td>${cover}</td>
             <td>${escHtml(s.name)}</td>
             <td>${escHtml(s.location || '-')}</td>
             <td>${escHtml(s.category || '-')}</td>
-            <td>${escHtml(s.hygieneLevel || '-')}</td>
-            <td>${escHtml(s.phone || '-')}</td>
+            <td>${escHtml(s.hygieneLevel || '-')}${s.phone ? '<div style="font-size:12px;color:#999">' + escHtml(s.phone) + '</div>' : ''}</td>
+            <td>${statusHtml}</td>
             <td class="action-btns">
-                <button class="btn btn-sm btn-info" onclick="editStore(${s.id})"><i class="fas fa-edit"></i></button>
+                ${paused
+                    ? `<button class="btn btn-sm btn-success" title="恢复接单" onclick="resumeStore(${s.id})"><i class="fas fa-play"></i></button>`
+                    : `<button class="btn btn-sm btn-warning" title="暂停接单" onclick="openPauseModal(${s.id})"><i class="fas fa-pause"></i></button>`}
+                <a class="btn btn-sm btn-info" title="排队看板" href="orders.html?tab=queue&storeId=${s.id}"><i class="fas fa-list-ol"></i></a>
+                <button class="btn btn-sm btn-default" onclick="editStore(${s.id})"><i class="fas fa-edit"></i></button>
                 <button class="btn btn-sm btn-danger" onclick="deleteStore(${s.id})"><i class="fas fa-trash"></i></button>
             </td>
         </tr>`;
     });
     document.getElementById('storeBody').innerHTML = h;
     renderPagination('storePagination', storePage, total, 'loadStores');
+}
+
+/* ---------- 暂停 / 恢复接单 ---------- */
+function openPauseModal(id) {
+    const s = stores.find(x => x.id === id);
+    if (!s) return;
+    document.getElementById('psId').value = id;
+    document.getElementById('psName').value = s.name || '';
+    document.getElementById('psReason').value = '';
+    document.getElementById('psResumeTime').value = '';
+    document.getElementById('psVoidActive').checked = false;
+    document.getElementById('pauseModal').classList.add('active');
+}
+function closePauseModal() { document.getElementById('pauseModal').classList.remove('active'); }
+
+async function submitPause() {
+    const id = document.getElementById('psId').value;
+    const reason = document.getElementById('psReason').value.trim();
+    if (!reason) { showToast('请填写暂停原因', 'warning'); return; }
+    const resume = document.getElementById('psResumeTime').value;
+    const voidActive = document.getElementById('psVoidActive').checked;
+    let url = '/api/admin/food/pauseStore?storeId=' + id + '&reason=' + encodeURIComponent(reason) + '&voidActiveOrders=' + voidActive;
+    if (resume) url += '&resumeTime=' + encodeURIComponent(resume);
+    const data = await api(url);
+    if (data !== null) {
+        // 门店列表与餐品详情页入口会同步置灰（列表接口实时返回暂停状态）
+        showToast(data === true ? '门店已暂停接单' : data);
+        closePauseModal();
+        loadStores(storePage);
+    }
+}
+
+function resumeStore(id) {
+    showConfirm('确定恢复该门店接单？', async () => {
+        const data = await api('/api/admin/food/resumeStore?storeId=' + id);
+        if (data !== null) { showToast('已恢复接单'); loadStores(storePage); }
+    });
 }
 
 function updateStoreSelect() {
@@ -285,7 +358,7 @@ function openStoreModal(item) {
 function closeStoreModal() { document.getElementById('storeModal').classList.remove('active'); }
 
 async function editStore(id) {
-    const data = await api('/api/food/store/detail?id=' + id);
+    const data = await api('/api/food/storeDetail?id=' + id);
     if (data) openStoreModal(data);
 }
 
@@ -303,13 +376,13 @@ async function saveStore() {
     const id = document.getElementById('fsId').value;
     if (id) fields.id = id;
     const params = Object.entries(fields).filter(([,v]) => v !== '').map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-    const data = await api('/api/admin/food/store/save?' + params);
+    const data = await api('/api/admin/food/saveStore?' + params);
     if (data !== null) { showToast('保存成功'); closeStoreModal(); loadStores(storePage); }
 }
 
 function deleteStore(id) {
     showConfirm('确定要删除该门店吗？', async () => {
-        const data = await api('/api/admin/food/store/delete?id=' + id);
+        const data = await api('/api/admin/food/deleteStore?id=' + id);
         if (data !== null) { showToast('删除成功'); loadStores(storePage); }
     });
 }

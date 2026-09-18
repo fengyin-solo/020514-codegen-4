@@ -20,6 +20,14 @@ public class FoodStore implements Serializable {
     private String coverImage;
     private Double longitude;
     private Double latitude;
+    /** 是否暂停接单：0 正常，1 暂停（忙碌时段） */
+    private Integer orderPaused;
+    /** 暂停接单原因 */
+    private String pauseReason;
+    /** 预计恢复接单时间 */
+    private Date resumeTime;
+    /** 暂停接单操作时间 */
+    private Date pauseTime;
     @TableField(fill = FieldFill.INSERT)
     private Date createTime;
     @TableField(fill = FieldFill.INSERT_UPDATE)

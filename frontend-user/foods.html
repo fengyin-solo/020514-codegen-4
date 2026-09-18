@@ -6,6 +6,23 @@
     <title>美食 - 贵州红色旅游</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        .store-strip { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin-bottom:28px; }
+        .store-mini { background:#fff; border:1px solid var(--border); border-radius:var(--r); padding:14px 16px; display:flex; flex-direction:column; gap:8px; transition:box-shadow .2s; }
+        .store-mini:hover { box-shadow:0 4px 16px rgba(0,0,0,.08); }
+        .store-mini .sm-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+        .store-mini .sm-name { font-weight:700; font-size:15px; color:var(--text); }
+        .store-mini .sm-loc { color:var(--text2); font-size:12.5px; display:flex; align-items:center; gap:5px; }
+        .store-mini .sm-meta { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px; }
+        .hygiene-badge { background:#07c160; color:#fff; padding:2px 8px; border-radius:4px; }
+        .pause-badge { background:#9aa0a6; color:#fff; padding:2px 8px; border-radius:4px; }
+        .queue-badge { background:#fff5f5; color:var(--red); border:1px solid #ffd9d9; padding:2px 8px; border-radius:4px; }
+        .pause-tip { background:#f6f6f7; color:#666; font-size:12px; border-radius:6px; padding:6px 8px; line-height:1.5; }
+        .my-queue { background:linear-gradient(135deg,#fff5f5,#ffe8e8); border:1px solid #ffd0d0; color:var(--red); font-weight:600; border-radius:6px; padding:6px 8px; font-size:12.5px; }
+                .food-card-disabled { opacity:.62; pointer-events:none; position:relative; }
+        .food-card-disabled .card-img { position:relative; }
+        .disabled-mask { position:absolute; inset:auto 0 0 0; background:rgba(120,120,120,.82); color:#fff; font-size:12px; text-align:center; padding:5px 0; border-radius:0 0 var(--r) var(--r); pointer-events:auto; }
+    </style>
 </head>
 <body>
 <header class="header">
@@ -29,6 +46,12 @@
 
 <div class="container">
     <div class="section">
+        <div class="section-title"><span>自取门店</span></div>
+        <div class="store-strip" id="storeStrip">
+            <div class="empty"><i class="fas fa-store"></i><p>门店加载中...</p></div>
+        </div>
+    </div>
+    <div class="section">
         <div class="section-title"><span>美食列表</span></div>
         <div class="filter-bar">
             <select id="category" onchange="loadFoods(1)">
@@ -47,7 +70,7 @@
     </div>
 </div>
 
-<footer class="footer"><div class="container"><p>© 2026 贵州红色文化旅游景点信息管理系统</p></div></footer>
+<footer class="footer"><div class="container"><p>© 2026 贵州红色文化旅游管理系统</p></div></footer>
 
 <script src="js/common.js"></script>
 <script>
@@ -65,10 +88,72 @@ async function loadCategories() {
     });
 }
 
+/* 门店列表：展示卫生等级、接单状态、排队概况与我的排队位置（暂停门店下单入口置灰，排序不受影响） */
+async function loadStores() {
+    const data = await api('/api/food/stores');
+    const el = document.getElementById('storeStrip');
+    if (!data || !data.length) { el.innerHTML = '<div class="empty"><i class="fas fa-store"></i><p>暂无门店</p></div>'; return; }
+    const stores = data.records || data;
+    el.innerHTML = '';
+    stores.forEach(s => el.appendChild(renderStoreCard(s)));
+    // 排队概况对所有访客展示；登录用户额外显示自己的排队位置（叫号之后可见）
+    stores.forEach(s => fillStoreQueue(s.id));
+}
+
+function renderStoreCard(s) {
+    const paused = s.orderPaused === 1;
+    const div = document.createElement('div');
+    div.className = 'store-mini';
+    div.id = 'storeCard-' + s.id;
+    let html = '<div class="sm-top">' +
+        '<span class="sm-name"><i class="fas fa-store" style="color:var(--red);margin-right:5px"></i>' + (s.name || '') + '</span>' +
+        (paused
+            ? '<span class="pause-badge"><i class="fas fa-pause-circle"></i> 暂停接单</span>'
+            : '<span class="queue-badge" id="storeWait-' + s.id + '"><i class="fas fa-user-clock"></i> 排队 -</span>') +
+    '</div>' +
+    '<div class="sm-loc"><i class="fas fa-map-marker-alt"></i> ' + (s.location || '-') + '</div>' +
+    '<div class="sm-meta"><span class="hygiene-badge"><i class="fas fa-shield-virus"></i> 卫生 ' + (s.hygieneLevel || '-') + '</span></div>' +
+    '<div id="storeMyQueue-' + s.id + '"></div>';
+    if (paused) {
+        html += '<div class="pause-tip"><i class="fas fa-info-circle"></i> ' + (s.pauseReason ? escHtml(s.pauseReason) : '门店忙碌，暂停接单') +
+            (s.resumeTime ? '<br>预计恢复：' + formatDate(s.resumeTime) : '') + '</div>';
+        // 暂停期间下单入口置灰
+        html += '<button class="btn btn-sm" style="background:#d5d7db;color:#8a8f96;cursor:not-allowed" disabled><i class="fas fa-ban"></i> 暂不下单</button>';
+    } else {
+        html += '<button class="btn btn-primary btn-sm" onclick="goStoreFoods(' + s.id + ')"><i class="fas fa-utensils"></i> 点本店餐品</button>';
+    }
+    div.innerHTML = html;
+    return div;
+}
+
+async function fillStoreQueue(storeId) {
+    const q = await api('/api/food/storeQueue?storeId=' + storeId);
+    if (!q) return;
+    const waitEl = document.getElementById('storeWait-' + storeId);
+    if (waitEl) waitEl.innerHTML = '<i class="fas fa-user-clock"></i> 排队 ' + (q.waitingCount || 0) + ' 单' +
+        (q.currentCallingNo ? ' · 叫号 ' + q.currentCallingNo : '');
+    const myEl = document.getElementById('storeMyQueue-' + storeId);
+    if (myEl && q.myQueue) {
+        const m = q.myQueue;
+        let txt = '';
+        if (m.status === 'READY') txt = '<i class="fas fa-bell"></i> 您的 ' + m.queueNo + ' 号已叫号，请尽快取餐！';
+        else if (m.position === 1) txt = '<i class="fas fa-concierge-bell"></i> 您的 ' + m.queueNo + ' 号排第 1 位，即将制作';
+        else txt = '<i class="fas fa-list-ol"></i> 我的排队号 ' + m.queueNo + '，前面还有 ' + ((m.position || 1) - 1) + ' 单';
+        myEl.innerHTML = '<div class="my-queue">' + txt + ' <a href="orders.html" style="text-decoration:underline">详情</a></div>';
+    }
+}
+
+function goStoreFoods(storeId) {
+    const card = document.getElementById('storeCard-' + storeId);
+    const name = card ? card.querySelector('.sm-name').textContent.trim() : '';
+    location.href = 'foods.html?keyword=' + encodeURIComponent(name);
+}
+
 async function loadFoods(page) {
     currentPage = page;
     const category = document.getElementById('category').value;
-    const keyword = document.getElementById('keyword').value.trim();
+    const keyword = (document.getElementById('keyword').value.trim()) || getParam('keyword') || '';
+    if (getParam('keyword') && !document.getElementById('keyword').value) document.getElementById('keyword').value = keyword;
     const orderBy = document.getElementById('orderBy').value;
     const data = await api('/api/food/list?page=' + page + '&size=9&category=' + encodeURIComponent(category) + '&keyword=' + encodeURIComponent(keyword) + '&orderBy=' + orderBy);
     const el = document.getElementById('foodList');
@@ -76,26 +161,37 @@ async function loadFoods(page) {
     const list = data.records || data.list || data;
     totalRecords = data.total || list.length;
     if (!list.length) { el.innerHTML = '<div class="empty"><i class="fas fa-utensils"></i><p>暂无数据</p></div>'; document.getElementById('pagination').innerHTML = ''; return; }
-    el.innerHTML = list.map(f =>
-        '<a class="card" href="food-detail.html?id=' + f.id + '">' +
+    el.innerHTML = list.map(f => {
+        const paused = f.storeOrderPaused === 1;
+        return '<a class="card' + (paused ? ' food-card-disabled' : '') + '" href="' + (paused ? 'javascript:void(0)' : ('food-detail.html?id=' + f.id)) + '">' +
             '<div class="card-img">' +
                 '<img src="' + API + (f.coverImage || '') + '" onerror="imgError(this)" alt="">' +
                 (f.category ? '<span class="card-tag">' + f.category + '</span>' : '') +
+                (paused ? '<span class="pause-badge" style="position:absolute;top:8px;right:8px"><i class="fas fa-pause-circle"></i> 暂停接单</span>' : '') +
             '</div>' +
             '<div class="card-body">' +
                 '<h3>' + (f.name || '') + '</h3>' +
                 '<p>' + (f.description || f.intro || '') + '</p>' +
                 '<div class="card-meta">' +
                     '<span class="card-price">¥' + (f.price || 0) + '</span>' +
+                    (f.storeName ? '<span style="color:var(--text2);font-size:12px"><i class="fas fa-store"></i> ' + escHtml(f.storeName) + '</span>' : '') +
                 '</div>' +
             '</div>' +
-        '</a>'
-    ).join('');
+            (paused ? '<div class="disabled-mask"><i class="fas fa-ban"></i> 门店暂停接单' + (f.resumeTime ? '，预计 ' + formatDate(f.resumeTime) + ' 恢复' : '') + '</div>' : '') +
+        '</a>';
+    }).join('');
     renderPagination(document.getElementById('pagination'), currentPage, totalRecords, 9, 'loadFoods');
 }
 
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 loadCategories();
+loadStores();
 loadFoods(1);
+// 排队位置每 15 秒刷新一次
+setInterval(loadStores, 15000);
 </script>
 </body>
 </html>

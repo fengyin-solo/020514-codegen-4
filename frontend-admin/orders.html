@@ -6,6 +6,15 @@
     <title>管理后台 - 订单管理</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/admin.css">
+    <style>
+        .queue-cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+        .queue-col h3 { font-size:15px; margin-bottom:10px; padding-bottom:8px; border-bottom:2px solid #f0f0f0; }
+        .queue-col h3 .cnt { background:#C41A1A; color:#fff; border-radius:10px; padding:1px 9px; font-size:12px; margin-left:6px; }
+        .q-card { border:1px solid #eee; border-radius:8px; padding:10px 12px; margin-bottom:10px; font-size:13px; background:#fff; }
+        .q-card .q-no { font-size:20px; font-weight:800; color:#C41A1A; }
+        .q-card .q-actions { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+        .store-pick { display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+    </style>
 </head>
 <body>
 <div class="admin-layout">
@@ -37,32 +46,56 @@
             <div class="top-bar-right"><span id="adminName"></span> <a href="#" onclick="doLogout()">退出</a></div>
         </header>
         <div class="content">
-            <div class="card">
-                <div class="filter-bar">
-                    <select class="form-control" id="fOrderType" onchange="loadData(1)">
-                        <option value="">全部类型</option>
-                        <option value="SPOT">景点</option>
-                        <option value="ROUTE">线路</option>
-                        <option value="HOTEL">酒店</option>
-                        <option value="FOOD">美食</option>
-                    </select>
-                    <select class="form-control" id="fStatus" onchange="loadData(1)">
-                        <option value="">全部状态</option>
-                        <option value="PENDING">待支付</option>
-                        <option value="PAID">已支付</option>
-                        <option value="COMPLETED">已完成</option>
-                        <option value="CANCELLED">已取消</option>
-                        <option value="REFUNDED">已退款</option>
-                    </select>
-                    <button class="btn btn-primary" onclick="loadData(1)"><i class="fas fa-search"></i> 筛选</button>
+            <div class="tabs" style="margin-bottom:16px">
+                <button class="tab-btn active" id="tabAllBtn" onclick="switchView('all')">全部订单</button>
+                <button class="tab-btn" id="tabQueueBtn" onclick="switchView('queue')">自取排队看板</button>
+            </div>
+
+            <div id="viewAll">
+                <div class="card">
+                    <div class="filter-bar">
+                        <select class="form-control" id="fOrderType" onchange="loadData(1)">
+                            <option value="">全部类型</option>
+                            <option value="SPOT">景点</option>
+                            <option value="ROUTE">线路</option>
+                            <option value="HOTEL">酒店</option>
+                            <option value="FOOD">美食自取</option>
+                        </select>
+                        <select class="form-control" id="fStatus" onchange="loadData(1)">
+                            <option value="">全部状态</option>
+                            <option value="PENDING">待支付</option>
+                            <option value="QUEUING">排队中</option>
+                            <option value="PREPARING">制作中</option>
+                            <option value="READY">待取餐</option>
+                            <option value="COMPLETED">已完成</option>
+                            <option value="VOID">已作废</option>
+                            <option value="CANCELLED">已取消</option>
+                            <option value="REFUNDED">已退款</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="loadData(1)"><i class="fas fa-search"></i> 筛选</button>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead><tr><th>订单号</th><th>用户</th><th>类型</th><th>目标/门店</th><th>金额</th><th>排队</th><th>状态</th><th>支付方式</th><th>时间</th><th>操作</th></tr></thead>
+                            <tbody id="tableBody"><tr><td colspan="10" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div class="pagination" id="pagination"></div>
                 </div>
-                <div class="table-wrapper">
-                    <table>
-                        <thead><tr><th>订单号</th><th>用户</th><th>类型</th><th>目标</th><th>金额</th><th>状态</th><th>支付方式</th><th>时间</th><th>操作</th></tr></thead>
-                        <tbody id="tableBody"><tr><td colspan="9" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr></tbody>
-                    </table>
+            </div>
+
+            <div id="viewQueue" style="display:none">
+                <div class="card">
+                    <div class="store-pick">
+                        <label style="font-weight:600"><i class="fas fa-store"></i> 选择门店：</label>
+                        <select class="form-control" id="queueStore" style="max-width:320px" onchange="loadQueueBoard()"></select>
+                        <button class="btn btn-default btn-sm" onclick="loadQueueBoard()"><i class="fas fa-sync"></i> 刷新</button>
+                        <span style="color:#999;font-size:12px">看板每 15 秒自动刷新</span>
+                    </div>
+                    <div class="queue-cols" id="queueBoard">
+                        <div class="empty-state"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
+                    </div>
                 </div>
-                <div class="pagination" id="pagination"></div>
             </div>
         </div>
     </div>
@@ -73,17 +106,29 @@
 if (!requireAdmin()) throw '';
 renderSidebar();
 
-let currentPage = 1;
+let currentPage = 1, currentView = 'all', storesCache = [];
 
 const statusMap = {
     'PENDING': { text: '待支付', cls: 'badge-warning' },
     'PAID': { text: '已支付', cls: 'badge-info' },
+    'QUEUING': { text: '排队中', cls: 'badge-info' },
+    'PREPARING': { text: '制作中', cls: 'badge-warning' },
+    'READY': { text: '待取餐', cls: 'badge-success' },
     'COMPLETED': { text: '已完成', cls: 'badge-success' },
+    'VOID': { text: '已作废', cls: 'badge-default' },
     'CANCELLED': { text: '已取消', cls: 'badge-default' },
     'REFUNDED': { text: '已退款', cls: 'badge-danger' }
 };
+const typeMap = { 'SPOT': '景点', 'ROUTE': '线路', 'HOTEL': '酒店', 'FOOD': '美食自取' };
 
-const typeMap = { 'SPOT': '景点', 'ROUTE': '线路', 'HOTEL': '酒店', 'FOOD': '美食' };
+function switchView(v) {
+    currentView = v;
+    document.getElementById('tabAllBtn').classList.toggle('active', v === 'all');
+    document.getElementById('tabQueueBtn').classList.toggle('active', v === 'queue');
+    document.getElementById('viewAll').style.display = v === 'all' ? '' : 'none';
+    document.getElementById('viewQueue').style.display = v === 'queue' ? '' : 'none';
+    if (v === 'queue') { loadStoresForPicker(); loadQueueBoard(); }
+}
 
 async function loadData(page) {
     currentPage = page;
@@ -93,61 +138,180 @@ async function loadData(page) {
     if (orderType) url += `&orderType=${orderType}`;
     if (status) url += `&status=${status}`;
 
-    document.getElementById('tableBody').innerHTML = '<tr><td colspan="8" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
+    document.getElementById('tableBody').innerHTML = '<tr><td colspan="10" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</td></tr>';
     const data = await api(url);
-    if (!data) { document.getElementById('tableBody').innerHTML = '<tr><td colspan="8" class="empty-state">加载失败</td></tr>'; return; }
+    if (!data) { document.getElementById('tableBody').innerHTML = '<tr><td colspan="10" class="empty-state">加载失败</td></tr>'; return; }
 
     const list = data.records || data.list || data || [];
     const total = data.pages || data.totalPages || Math.ceil((data.total || list.length) / 10);
-    if (!list.length) { document.getElementById('tableBody').innerHTML = '<tr><td colspan="8" class="empty-state"><i class="fas fa-inbox"></i> 暂无数据</td></tr>'; document.getElementById('pagination').innerHTML = ''; return; }
+    if (!list.length) { document.getElementById('tableBody').innerHTML = '<tr><td colspan="10" class="empty-state"><i class="fas fa-inbox"></i> 暂无数据</td></tr>'; document.getElementById('pagination').innerHTML = ''; return; }
 
     let h = '';
     list.forEach(o => {
         const st = statusMap[o.status] || { text: o.status || '-', cls: 'badge-default' };
         const tp = typeMap[o.orderType] || o.orderType || '-';
+        const queueCell = o.queueNo ? `<b style="color:#C41A1A;font-size:15px">#${o.queueNo}</b>` +
+            (o.queuePosition != null && ['QUEUING','PREPARING','READY'].includes(o.status) ? `<div style="font-size:11px;color:#999">前${Math.max(0,o.queuePosition-1)}单</div>` : '') : '-';
+        const targetCell = escHtml(o.targetName || '-') + (o.storeName ? `<div style="font-size:11px;color:#999"><i class="fas fa-store"></i> ${escHtml(o.storeName)}</div>` : '');
+        let remark = '';
+        if (o.status === 'VOID' && o.voidReason) remark = `<div style="font-size:11px;color:#999;max-width:160px" title="${escHtml(o.voidReason)}"><i class="fas fa-info-circle"></i> ${escHtml(o.voidReason)}</div>`;
         h += `<tr>
             <td>${escHtml(o.orderNo || o.id)}</td>
             <td>${escHtml(o.username || '-')}</td>
             <td><span class="badge badge-info">${tp}</span></td>
-            <td>${escHtml(o.targetName || '-')}</td>
+            <td>${targetCell}</td>
             <td style="font-weight:600;color:#C41A1A">¥${o.amount != null ? o.amount : '-'}</td>
-            <td><span class="badge ${st.cls}">${st.text}</span></td>
+            <td>${queueCell}</td>
+            <td><span class="badge ${st.cls}">${st.text}</span>${remark}</td>
             <td>${payMethodName(o.payMethod || o.payType)}</td>
             <td>${formatDate(o.createTime || o.createdAt)}</td>
-            <td class="action-btns">
-                ${o.status === 'PAID' ? `<button class="btn btn-sm btn-success" onclick="completeOrder(${o.id})">完成</button><button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>` : ''}
-                ${o.status === 'PENDING' ? `<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">取消</button>` : ''}
-                ${o.status === 'CANCELLED' || o.status === 'REFUNDED' || o.status === 'COMPLETED' ? `<button class="btn btn-sm btn-default" onclick="deleteOrder(${o.id})">删除</button>` : ''}
-            </td>
+            <td class="action-btns">${adminOrderActions(o)}</td>
         </tr>`;
     });
     document.getElementById('tableBody').innerHTML = h;
     renderPagination('pagination', currentPage, total, 'loadData');
 }
 
+function adminOrderActions(o) {
+    let btns = '';
+    if (o.status === 'PENDING') {
+        btns += `<button class="btn btn-sm btn-danger" onclick="cancelOrder(${o.id})">取消</button>`;
+    }
+    if (o.orderType === 'FOOD') {
+        if (o.status === 'QUEUING') btns += `<button class="btn btn-sm btn-primary" onclick="acceptOrder(${o.id})">接单</button>`;
+        if (o.status === 'PREPARING') btns += `<button class="btn btn-sm btn-success" onclick="readyOrder(${o.id})">出餐叫号</button>`;
+        if (['QUEUING','PREPARING','READY'].includes(o.status)) {
+            btns += `<button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>`;
+            btns += `<button class="btn btn-sm btn-default" onclick="voidOrder(${o.id})">作废</button>`;
+        }
+        if (o.status === 'VOID') btns += `<button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>`;
+    } else {
+        if (o.status === 'PAID') btns += `<button class="btn btn-sm btn-success" onclick="completeOrder(${o.id})">完成</button><button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>`;
+    }
+    btns += `<button class="btn btn-sm btn-info" title="流转记录" onclick="viewLogs(${o.id})"><i class="fas fa-stream"></i></button>`;
+    if (['CANCELLED','REFUNDED','COMPLETED','VOID'].includes(o.status)) btns += `<button class="btn btn-sm btn-default" onclick="deleteOrder(${o.id})">删除</button>`;
+    return btns;
+}
+
+/* ---------- 自取排队看板 ---------- */
+async function loadStoresForPicker() {
+    const data = await api('/api/food/stores');
+    storesCache = data || [];
+    const sel = document.getElementById('queueStore');
+    if (sel.options.length) return;
+    sel.innerHTML = storesCache.map(s => `<option value="${s.id}">${escHtml(s.name)}${s.orderPaused === 1 ? '（暂停中）' : ''}</option>`).join('');
+    const qs = getParam('storeId');
+    if (qs) sel.value = qs;
+}
+
+async function loadQueueBoard() {
+    const storeId = document.getElementById('queueStore').value;
+    const board = document.getElementById('queueBoard');
+    if (!storeId) { board.innerHTML = '<div class="empty-state">请先选择门店</div>'; return; }
+    const data = await api('/api/admin/order/storeQueueOrders?storeId=' + storeId);
+    if (!data) { board.innerHTML = '<div class="empty-state">加载失败</div>'; return; }
+    const cols = [
+        ['QUEUING', '排队中', 'fa-list-ol'],
+        ['PREPARING', '制作中', 'fa-fire'],
+        ['READY', '待取餐（已叫号）', 'fa-bell'],
+        ['COMPLETED', '今日已完成', 'fa-check-circle'],
+        ['VOID', '已作废', 'fa-ban']
+    ];
+    board.innerHTML = cols.map(([key, title, icon]) => {
+        const list = data[key] || [];
+        return `<div class="queue-col"><h3><i class="fas ${icon}"></i> ${title}<span class="cnt">${list.length}</span></h3>` +
+            (list.length ? list.map(o => renderQCard(o, key)).join('') : '<div style="color:#bbb;font-size:12px">暂无订单</div>') +
+            '</div>';
+    }).join('');
+}
+
+function renderQCard(o, stage) {
+    let actions = '';
+    if (stage === 'QUEUING') actions = `<button class="btn btn-sm btn-primary" onclick="acceptOrder(${o.id})">接单制作</button>
+        <button class="btn btn-sm btn-default" onclick="voidOrder(${o.id})">作废</button>`;
+    else if (stage === 'PREPARING') actions = `<button class="btn btn-sm btn-success" onclick="readyOrder(${o.id})">出餐叫号</button>
+        <button class="btn btn-sm btn-default" onclick="voidOrder(${o.id})">作废</button>`;
+    else if (stage === 'READY') actions = `<button class="btn btn-sm btn-default" onclick="voidOrder(${o.id})">超时作废</button>
+        <button class="btn btn-sm btn-warning" onclick="refundOrder(${o.id})">退款</button>`;
+    const times = o.acceptTime ? `<div style="color:#999">接单：${formatDate(o.acceptTime)}</div>` : '';
+    const readyT = o.readyTime ? `<div style="color:#999">叫号：${formatDate(o.readyTime)}</div>` : '';
+    const voidR = o.voidReason ? `<div style="color:#b06a00;font-size:12px;margin-top:4px"><i class="fas fa-info-circle"></i> ${escHtml(o.voidReason)}</div>` : '';
+    return `<div class="q-card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+            <span class="q-no">#${o.queueNo}</span>
+            <span style="color:#999;font-size:12px">${escHtml(o.username || '-')}</span>
+        </div>
+        <div style="margin:4px 0">${escHtml(o.targetName || '')} × ${o.quantity || 1} <span style="color:#C41A1A;font-weight:600">¥${o.amount || 0}</span></div>
+        <div style="color:#999;font-size:12px">下单：${formatDate(o.createTime)}</div>${times}${readyT}${voidR}
+        <div class="q-actions">${actions}</div>
+    </div>`;
+}
+
+/* ---------- 操作 ---------- */
+function acceptOrder(id) {
+    showConfirm('确认接单并开始制作？', async () => {
+        const d = await api('/api/admin/order/accept?orderId=' + id);
+        if (d !== null) { showToast('已接单'); refreshCurrent(); }
+    });
+}
+function readyOrder(id) {
+    showConfirm('确认出餐并叫号？用户将收到取餐通知。', async () => {
+        const d = await api('/api/admin/order/ready?orderId=' + id);
+        if (d !== null) { showToast('已叫号'); refreshCurrent(); }
+    });
+}
+function voidOrder(id) {
+    const reason = window.prompt('请输入作废原因（超时未取 / 门店停止出餐等）：');
+    if (reason === null) return;
+    if (!reason.trim()) { showToast('作废必须注明原因', 'warning'); return; }
+    const r = encodeURIComponent(reason.trim());
+    api('/api/admin/order/void?orderId=' + id + '&reason=' + r).then(d => {
+        if (d !== null) { showToast('已作废（金额可退）'); refreshCurrent(); }
+    });
+}
 function completeOrder(id) {
     showConfirm('确定将此订单标记为已完成？', async () => {
         var d = await api('/api/admin/order/complete?orderId=' + id);
-        if (d !== null) { showToast('操作成功'); loadData(currentPage); }
+        if (d !== null) { showToast('操作成功'); refreshCurrent(); }
     });
 }
 function cancelOrder(id) {
     showConfirm('确定取消此订单？', async () => {
         var d = await api('/api/admin/order/cancel?orderId=' + id);
-        if (d !== null) { showToast('操作成功'); loadData(currentPage); }
+        if (d !== null) { showToast('操作成功'); refreshCurrent(); }
     });
 }
 function refundOrder(id) {
-    showConfirm('确定为此订单退款？退款将自动处理。', async () => {
+    showConfirm('确定为此订单退款？已支付金额将原路退回（模拟）。', async () => {
         var d = await api('/api/admin/order/refund?orderId=' + id);
-        if (d !== null) { showToast('操作成功'); loadData(currentPage); }
+        if (d !== null) { showToast('操作成功'); refreshCurrent(); }
     });
 }
 function deleteOrder(id) {
     showConfirm('确定删除此订单？此操作不可恢复。', async () => {
         var d = await api('/api/admin/order/delete?orderId=' + id);
-        if (d !== null) { showToast('已删除'); loadData(currentPage); }
+        if (d !== null) { showToast('已删除'); refreshCurrent(); }
     });
+}
+async function viewLogs(id) {
+    const logs = await api('/api/admin/order/statusLogs?orderId=' + id);
+    if (!logs) return;
+    const nameMap = {PENDING:'待支付',PAID:'已支付',QUEUING:'排队中',PREPARING:'制作中',READY:'待取餐',COMPLETED:'已完成',VOID:'已作废',CANCELLED:'已取消',REFUNDED:'已退款'};
+    const body = logs.length ? logs.map(l =>
+        `<div style="border-left:2px solid #C41A1A;padding:2px 0 12px 12px;margin-left:6px;font-size:13px">
+            <b>${nameMap[l.toStatus] || l.toStatus}</b>
+            <div style="color:#999;font-size:12px">${formatDate(l.createTime)} · ${({USER:'用户',ADMIN:'门店',SYSTEM:'系统'})[l.operator]||l.operator||'-'}</div>
+            ${l.remark ? `<div>${escHtml(l.remark)}</div>` : ''}
+        </div>`).join('') : '暂无记录';
+    const div = document.createElement('div');
+    div.className = 'modal-overlay active';
+    div.innerHTML = `<div class="modal"><div class="modal-header"><h3>状态流转记录</h3><button class="modal-close">&times;</button></div><div class="modal-body">${body}</div></div>`;
+    div.onclick = e => { if (e.target === div || e.target.classList.contains('modal-close')) div.remove(); };
+    document.body.appendChild(div);
+}
+
+function refreshCurrent() {
+    if (currentView === 'queue') loadQueueBoard(); else loadData(currentPage);
 }
 
 function payMethodName(m) {
@@ -155,7 +319,9 @@ function payMethodName(m) {
     return m ? (map[m] || m) : '-';
 }
 
-loadData(1);
+// 支持从美食管理页带参数直达排队看板
+if (getParam('tab') === 'queue') switchView('queue'); else loadData(1);
+setInterval(() => { if (currentView === 'queue') loadQueueBoard(); }, 15000);
 </script>
 </body>
 </html>

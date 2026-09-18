@@ -126,9 +126,13 @@ docker compose up --build -d
 | 端点 | 说明 |
 |------|------|
 | `GET /api/order/create?orderType=&targetId=&targetName=&amount=&quantity=` | 创建订单 |
-| `GET /api/order/pay?orderId=&payMethod=` | 模拟支付（payMethod: WECHAT/BANK_ICBC/BANK_CCB/BANK_ABC/BANK_BOC/BANK_BOCOM/BANK_CMB/BANK_PSBC） |
+| `GET /api/order/pay?orderId=&payMethod=` | 模拟支付（payMethod: WECHAT/BANK_ICBC/BANK_CCB/BANK_ABC/BANK_BOC/BANK_BOCOM/BANK_CMB/BANK_PSBC）。**美食订单支付完成自动进入「排队中」并分配门店排队号** |
 | `GET /api/order/cancel?orderId=` | 取消订单 |
-| `GET /api/order/refund?orderId=` | 申请退款 |
+| `GET /api/order/refund?orderId=` | 申请退款（排队中/制作中/待取餐/已作废的已支付金额均可退） |
+| `GET /api/order/confirmPickup?orderId=` | 用户确认取餐（待取餐 → 已完成） |
+| `GET /api/order/statusLogs?orderId=` | 订单状态流转记录（每次状态变更的时间与原因） |
+| `GET /api/order/queuePosition?storeId=&orderId=` | 查询某订单在门店的实时排队位置 |
+| `GET /api/food/storeQueue?storeId=` | 门店排队概况（排队/待取餐数量、当前叫号、我的排队位置） |
 | `GET /api/order/myList?page=&size=` | 我的订单列表 |
 | `GET /api/favorite/add?targetType=&targetId=` | 收藏/取消收藏 |
 | `GET /api/favorite/list?targetType=` | 收藏列表 |
@@ -183,6 +187,13 @@ docker compose up --build -d
 | `GET /api/admin/food/*` | 美食 CRUD |
 | `GET /api/admin/comment/*` | 留言管理（list/reply/delete） |
 | `GET /api/admin/order/*` | 订单管理（list/complete/cancel/refund/delete） |
+| `GET /api/admin/order/accept?orderId=` | 门店接单：排队中 → 制作中 |
+| `GET /api/admin/order/ready?orderId=` | 出餐叫号：制作中 → 待取餐（自动通知用户） |
+| `GET /api/admin/order/void?orderId=&reason=` | 作废订单（必须注明原因；金额保持可退） |
+| `GET /api/admin/order/statusLogs?orderId=` | 订单状态流转时间线 |
+| `GET /api/admin/order/storeQueueOrders?storeId=` | 门店自取排队看板（分状态订单） |
+| `GET /api/admin/food/pauseStore?storeId=&reason=&resumeTime=&voidActiveOrders=` | 门店暂停接单（注明原因与恢复时段；可同时作废在制订单，金额可退） |
+| `GET /api/admin/food/resumeStore?storeId=` | 门店恢复接单 |
 | `GET /api/admin/faq/*` | FAQ CRUD |
 | `GET /api/admin/feedback/*` | 反馈管理（list/reply/status/delete） |
 | `GET /api/admin/customRoute/list?status=` | 用户提交的线路审核列表 |
@@ -308,6 +319,22 @@ label-02051/
 ---
 
 ## 8. 支付说明（Mock 模式）
+
+### 美食自取排队状态流转
+
+美食订单支付后进入门店自取排队链路，每次状态变化均记录变更时间（`order_status_log` 表 + `order_info` 各阶段时间字段）：
+
+```
+待支付 PENDING ──支付──▶ 排队中 QUEUING ──门店接单──▶ 制作中 PREPARING ──出餐叫号──▶ 待取餐 READY ──用户确认取餐──▶ 已完成 COMPLETED
+                                                                 │                          │
+                                                                 └──────门店作废──────────▶ 已作废 VOID（注明原因，金额可退）
+                                                                                            超时未取（默认30分钟）自动作废 ▲
+```
+
+- **排队号**：支付时按「门店 + 当日」从 1 递增分配；叫号后用户可在美食页门店卡片、餐品详情、我的订单中查看实时排队位置。
+- **门店暂停接单**：管理端美食管理可暂停/恢复，必须填写暂停原因并可注明预计恢复时段；暂停期间美食列表卡片与餐品详情页下单入口同时置灰，**卫生等级展示与价格排序不受影响**。
+- **临时停止出餐**：暂停时可一键作废该门店排队中/制作中订单，系统通知用户且已支付金额保持可退；已作废订单用户端/管理端均可发起退款。
+- **超时未取**：待取餐超过 `order.pickup-timeout-minutes`（默认 30 分钟）由定时任务自动作废并注明原因。
 
 支付为完整模拟流程，调用 `/api/order/pay` 即立即标记为已支付，无需真实扣款。
 

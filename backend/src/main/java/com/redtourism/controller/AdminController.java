@@ -472,6 +472,37 @@ public class AdminController {
         return Result.success("保存成功", null);
     }
 
+    /** 门店暂停接单（忙碌时段，需注明原因与预计恢复时段） */
+    @GetMapping("/food/pauseStore")
+    public Result<String> pauseStore(@RequestParam Long storeId,
+                                      @RequestParam String reason,
+                                      @RequestParam(required = false) String resumeTime,
+                                      @RequestParam(required = false, defaultValue = "false") boolean voidActiveOrders) {
+        java.util.Date resume = null;
+        if (resumeTime != null && !resumeTime.isEmpty()) {
+            try {
+                resume = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(resumeTime);
+            } catch (Exception e) {
+                try { resume = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm").parse(resumeTime); }
+                catch (Exception ignored) {}
+            }
+        }
+        foodService.pauseStore(storeId, reason, resume);
+        int voidCount = 0;
+        if (voidActiveOrders) {
+            // 门店临时停止出餐：在制订单批量作废，已支付金额保持可退
+            voidCount = orderService.voidStoreActiveOrders(storeId, "门店临时停止出餐：" + reason, "ADMIN");
+        }
+        return Result.success(voidCount > 0 ? ("已暂停接单，" + voidCount + " 笔在制订单已作废（金额可退）") : "门店已暂停接单", null);
+    }
+
+    /** 门店恢复接单 */
+    @GetMapping("/food/resumeStore")
+    public Result<String> resumeStore(@RequestParam Long storeId) {
+        foodService.resumeStore(storeId);
+        return Result.success("门店已恢复接单", null);
+    }
+
     @GetMapping("/food/deleteStore")
     public Result<String> deleteFoodStore(@RequestParam Long id) {
         foodService.deleteStore(id);
@@ -513,8 +544,19 @@ public class AdminController {
     public Result<IPage<OrderInfo>> orderList(@RequestParam(defaultValue = "1") int page,
                                                @RequestParam(defaultValue = "10") int size,
                                                @RequestParam(required = false) String orderType,
-                                               @RequestParam(required = false) String status) {
-        return Result.success(orderService.listAllOrders(page, size, orderType, status));
+                                               @RequestParam(required = false) String status,
+                                               @RequestParam(required = false) Long storeId) {
+        LambdaQueryWrapper<OrderInfo> w = new LambdaQueryWrapper<>();
+        if (orderType != null && !orderType.isEmpty()) w.eq(OrderInfo::getOrderType, orderType);
+        if (status != null && !status.isEmpty()) w.eq(OrderInfo::getStatus, status);
+        if (storeId != null) w.eq(OrderInfo::getStoreId, storeId);
+        w.orderByDesc(OrderInfo::getCreateTime);
+        IPage<OrderInfo> result = orderService.page(new Page<>(page, size), w);
+        result.getRecords().forEach(o -> {
+            User u = userMapper.selectById(o.getUserId());
+            if (u != null) o.setUsername(u.getNickname() != null ? u.getNickname() : u.getUsername());
+        });
+        return Result.success(orderService.listAllOrdersEnriched(result));
     }
 
     @GetMapping("/order/cancel")
@@ -530,7 +572,9 @@ public class AdminController {
     public Result<String> adminRefundOrder(@RequestParam Long orderId) {
         OrderInfo order = orderService.getById(orderId);
         if (order == null) return Result.error("订单不存在");
+        // 排队中/制作中/待取餐/已作废等已支付状态金额始终可退
         order.setStatus("REFUNDED");
+        order.setRefundTime(new Date());
         orderService.updateById(order);
         return Result.success("已退款");
     }
@@ -540,8 +584,63 @@ public class AdminController {
         OrderInfo order = orderService.getById(orderId);
         if (order == null) return Result.error("订单不存在");
         order.setStatus("COMPLETED");
+        order.setCompleteTime(new Date());
         orderService.updateById(order);
         return Result.success("已完成");
+    }
+
+    // ---------- 自取排队流转 ----------
+
+    /** 门店接单：排队中 -> 制作中 */
+    @GetMapping("/order/accept")
+    public Result<String> acceptOrder(@RequestParam Long orderId) {
+        orderService.acceptOrder(orderId);
+        return Result.success("已接单，开始制作", null);
+    }
+
+    /** 出餐叫号：制作中 -> 待取餐 */
+    @GetMapping("/order/ready")
+    public Result<String> readyOrder(@RequestParam Long orderId) {
+        orderService.readyOrder(orderId);
+        return Result.success("已出餐叫号", null);
+    }
+
+    /** 作废订单（超时未取等，必须注明原因，金额保持可退） */
+    @GetMapping("/order/void")
+    public Result<String> voidOrder(@RequestParam Long orderId, @RequestParam String reason) {
+        orderService.voidOrder(orderId, reason, "ADMIN");
+        return Result.success("订单已作废", null);
+    }
+
+    /** 订单状态流转时间线 */
+    @GetMapping("/order/statusLogs")
+    public Result<List<com.redtourism.entity.OrderStatusLog>> orderStatusLogs(@RequestParam Long orderId) {
+        return Result.success(orderService.listStatusLogs(orderId));
+    }
+
+    /** 门店排队看板：门店内当日各状态订单 */
+    @GetMapping("/order/storeQueueOrders")
+    public Result<Map<String, Object>> storeQueueOrders(@RequestParam Long storeId) {
+        Map<String, Object> data = new HashMap<>();
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        c.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        c.set(java.util.Calendar.MINUTE, 0);
+        c.set(java.util.Calendar.SECOND, 0);
+        c.set(java.util.Calendar.MILLISECOND, 0);
+        Date dayStart = c.getTime();
+        for (String st : new String[]{"QUEUING", "PREPARING", "READY", "VOID", "COMPLETED"}) {
+            List<OrderInfo> list = orderService.list(new LambdaQueryWrapper<OrderInfo>()
+                    .eq(OrderInfo::getStoreId, storeId)
+                    .ge(OrderInfo::getCreateTime, dayStart)
+                    .eq(OrderInfo::getStatus, st)
+                    .orderByAsc(OrderInfo::getQueueNo));
+            list.forEach(o -> {
+                User u = userMapper.selectById(o.getUserId());
+                if (u != null) o.setUsername(u.getNickname() != null ? u.getNickname() : u.getUsername());
+            });
+            data.put(st, list);
+        }
+        return Result.success(data);
     }
 
     @GetMapping("/order/delete")

@@ -52,8 +52,11 @@
             <div class="tabs">
                 <div class="tab active" onclick="switchStatus('')">全部</div>
                 <div class="tab" onclick="switchStatus('PENDING')">待支付</div>
-                <div class="tab" onclick="switchStatus('PAID')">已支付</div>
-                <div class="tab" onclick="switchStatus('CANCELLED')">已取消</div>
+                <div class="tab" onclick="switchStatus('QUEUING')">排队中</div>
+                <div class="tab" onclick="switchStatus('PREPARING')">制作中</div>
+                <div class="tab" onclick="switchStatus('READY')">待取餐</div>
+                <div class="tab" onclick="switchStatus('COMPLETED')">已完成</div>
+                <div class="tab" onclick="switchStatus('VOID')">已作废</div>
                 <div class="tab" onclick="switchStatus('REFUNDED')">已退款</div>
             </div>
             <div id="orderList"></div>
@@ -115,7 +118,8 @@
 <script>
 if (!requireLogin()) throw new Error('need login');
 
-let currentPage = 1, totalRecords = 0, currentStatus = '', payingOrderId = null, payMethod = 'WECHAT';
+let currentPage = 1, totalRecords = 0, currentStatus = '', payingOrderId = null, payMethod = 'WECHAT', loading = false;
+const STATUS_TABS = ['', 'PENDING', 'QUEUING', 'PREPARING', 'READY', 'COMPLETED', 'VOID', 'REFUNDED'];
 
 function renderSidebar() {
     const u = getUser();
@@ -132,16 +136,67 @@ function getStatusBadge(status) {
     const map = {
         'PENDING': '<span class="status status-pending"><i class="fas fa-clock"></i> 待支付</span>',
         'PAID': '<span class="status status-paid"><i class="fas fa-check-circle"></i> 已支付</span>',
+        'QUEUING': '<span class="status" style="background:#e8f0fe;color:#1a73e8"><i class="fas fa-list-ol"></i> 排队中</span>',
+        'PREPARING': '<span class="status" style="background:#fff3e0;color:#ef6c00"><i class="fas fa-fire"></i> 制作中</span>',
+        'READY': '<span class="status" style="background:#e6f4ea;color:#137333"><i class="fas fa-bell"></i> 待取餐</span>',
+        'COMPLETED': '<span class="status status-paid"><i class="fas fa-star"></i> 已完成</span>',
+        'VOID': '<span class="status" style="background:#f0f0f0;color:#999"><i class="fas fa-ban"></i> 已作废</span>',
         'CANCELLED': '<span class="status status-closed"><i class="fas fa-times-circle"></i> 已取消</span>',
-        'REFUNDED': '<span class="status" style="background:#f0f0f0;color:#999"><i class="fas fa-undo"></i> 已退款</span>',
-        'COMPLETED': '<span class="status status-paid"><i class="fas fa-star"></i> 已完成</span>'
+        'REFUNDED': '<span class="status" style="background:#f0f0f0;color:#999"><i class="fas fa-undo"></i> 已退款</span>'
     };
     return map[status] || '<span class="status">' + status + '</span>';
 }
 
 function getOrderTypeName(type) {
-    const map = { 'SPOT': '<i class="fas fa-mountain"></i> 景点', 'HOTEL': '<i class="fas fa-hotel"></i> 酒店', 'ROUTE': '<i class="fas fa-route"></i> 线路', 'FOOD': '<i class="fas fa-utensils"></i> 美食' };
+    const map = { 'SPOT': '<i class="fas fa-mountain"></i> 景点', 'HOTEL': '<i class="fas fa-hotel"></i> 酒店', 'ROUTE': '<i class="fas fa-route"></i> 线路', 'FOOD': '<i class="fas fa-utensils"></i> 美食自取' };
     return map[type] ? '<span class="order-type-badge">' + map[type] + '</span>' : '';
+}
+
+function isFood(o) { return o.orderType === 'FOOD'; }
+
+/* 自取排队进度条：排队中 -> 制作中 -> 待取餐 -> 已完成 */
+function queueProgress(o) {
+    const steps = ['QUEUING', 'PREPARING', 'READY', 'COMPLETED'];
+    const labels = ['排队中', '制作中', '待取餐', '已完成'];
+    if (o.status === 'VOID' || o.status === 'REFUNDED') return '';
+    let idx = steps.indexOf(o.status);
+    if (idx < 0) return '';
+    let h = '<div style="display:flex;align-items:center;margin:12px 0 6px;font-size:12px">';
+    steps.forEach((s, i) => {
+        const done = i <= idx;
+        h += '<div style="display:flex;flex-direction:column;align-items:center;flex:0 0 56px">' +
+            '<div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:' + (done ? '#C41A1A' : '#e5e5e5') + ';color:#fff">' +
+                '<i class="fas fa-' + (['list-ol','fire','bell','check'][i]) + '"></i></div>' +
+            '<span style="margin-top:4px;color:' + (done ? '#C41A1A' : '#999') + ';font-weight:' + (done ? '700' : '400') + '">' + labels[i] + '</span></div>';
+        if (i < steps.length - 1) h += '<div style="flex:1;height:2px;background:' + (i < idx ? '#C41A1A' : '#e5e5e5') + ';margin:0 4px 18px"></div>';
+    });
+    return h + '</div>';
+}
+
+function queueInfoLine(o) {
+    if (!isFood(o) || !o.queueNo) return '';
+    let h = '<div style="background:#fff5f5;border:1px solid #ffd9d9;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:13px;color:var(--red)">';
+    h += '<i class="fas fa-hashtag"></i> 排队号：<b style="font-size:15px">' + o.queueNo + '</b>';
+    if (o.status === 'QUEUING' && o.queuePosition != null) {
+        h += ' &nbsp;·&nbsp; <i class="fas fa-user-clock"></i> 前面还有 <b>' + (o.queuePosition - 1) + '</b> 单（您排第 ' + o.queuePosition + ' 位）';
+    } else if (o.status === 'PREPARING') {
+        h += ' &nbsp;·&nbsp; <i class="fas fa-fire"></i> 门店正在加急制作，请耐心等待';
+    } else if (o.status === 'READY') {
+        h += ' &nbsp;·&nbsp; <i class="fas fa-bell"></i> 已叫号！请尽快到店取餐（超时未取将自动作废）';
+    } else if (o.status === 'COMPLETED') {
+        h += ' &nbsp;·&nbsp; <i class="fas fa-check-circle"></i> 已取餐完成';
+    }
+    if (o.storeName) h += '<div style="color:var(--text2);margin-top:4px"><i class="fas fa-store"></i> 取餐门店：' + escHtml(o.storeName) + '</div>';
+    h += '</div>';
+    return h;
+}
+
+function voidReasonLine(o) {
+    if (o.status !== 'VOID' || !o.voidReason) return '';
+    return '<div style="background:#f6f6f7;border-radius:8px;padding:8px 12px;margin-top:10px;font-size:13px;color:#666">' +
+        '<i class="fas fa-info-circle"></i> 作废原因：' + escHtml(o.voidReason) +
+        (o.voidTime ? '（' + formatDate(o.voidTime) + '）' : '') +
+        '<br><i class="fas fa-yen-sign"></i> 已支付 ¥' + (o.amount || 0) + ' 仍可申请退款。</div>';
 }
 
 function getOrderActions(order) {
@@ -149,8 +204,16 @@ function getOrderActions(order) {
     if (order.status === 'PENDING') {
         html += '<button class="btn btn-outline btn-sm" onclick="cancelOrder(\'' + order.id + '\')"><i class="fas fa-times"></i> 取消</button>';
         html += '<button class="btn btn-primary btn-sm" onclick="openPayModal(\'' + order.id + '\')"><i class="fas fa-credit-card"></i> 立即支付</button>';
-    } else if (order.status === 'PAID') {
+    } else if (['PAID','QUEUING','PREPARING'].includes(order.status)) {
         html += '<button class="btn btn-outline btn-sm" onclick="refundOrder(\'' + order.id + '\')"><i class="fas fa-undo"></i> 申请退款</button>';
+    } else if (order.status === 'READY') {
+        html += '<button class="btn btn-primary btn-sm" onclick="confirmPickup(\'' + order.id + '\')"><i class="fas fa-check-double"></i> 确认取餐</button>';
+    } else if (order.status === 'VOID') {
+        // 已作废订单：已支付金额保持可退
+        html += '<button class="btn btn-primary btn-sm" onclick="refundOrder(\'' + order.id + '\')"><i class="fas fa-yen-sign"></i> 申请退款</button>';
+    }
+    if (isFood(order) && ['QUEUING','PREPARING','READY','COMPLETED','VOID'].includes(order.status)) {
+        html += '<button class="btn btn-outline btn-sm" onclick="showTimeline(\'' + order.id + '\')"><i class="fas fa-stream"></i> 流转记录</button>';
     }
     return html;
 }
@@ -159,12 +222,15 @@ function switchStatus(status) {
     currentStatus = status;
     document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
     const tabs = document.querySelectorAll('.tabs .tab');
-    const idx = ['', 'PENDING', 'PAID', 'CANCELLED', 'REFUNDED'].indexOf(status);
+    const idx = STATUS_TABS.indexOf(status);
     if (idx >= 0 && tabs[idx]) tabs[idx].classList.add('active');
     loadOrders(1);
 }
 
 async function loadOrders(page) {
+    if (loading) return;
+    loading = true;
+    try {
     currentPage = page;
     const data = await api('/api/order/myList?page=' + page + '&size=10&orderType=&status=' + currentStatus);
     const el = document.getElementById('orderList');
@@ -180,16 +246,51 @@ async function loadOrders(page) {
             '</div>' +
             '<div class="order-card-body">' +
                 '<div class="order-target-name">' + getOrderTypeName(o.orderType) + (o.targetName || '订单') + '</div>' +
+                queueProgress(o) +
                 '<div class="order-meta-row">' +
                     '<div class="order-meta-item"><i class="fas fa-yen-sign"></i> <span>金额：</span><span class="order-amount">¥' + (o.amount || 0) + '</span></div>' +
                     '<div class="order-meta-item"><i class="fas fa-layer-group"></i> <span>数量：' + (o.quantity || 1) + '</span></div>' +
                     '<div class="order-meta-item"><i class="fas fa-calendar-alt"></i> <span>' + formatDate(o.createTime || o.createdAt) + '</span></div>' +
                 '</div>' +
+                queueInfoLine(o) +
+                voidReasonLine(o) +
             '</div>' +
             (getOrderActions(o) ? '<div class="order-card-footer">' + getOrderActions(o) + '</div>' : '') +
         '</div>'
     ).join('');
     renderPagination(document.getElementById('pagination'), currentPage, totalRecords, 10, 'loadOrders');
+    } finally { loading = false; }
+}
+
+function escHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function showTimeline(orderId) {
+    const logs = await api('/api/order/statusLogs?orderId=' + orderId);
+    if (!logs) return;
+    const nameMap = {PENDING:'待支付',PAID:'已支付',QUEUING:'排队中',PREPARING:'制作中',READY:'待取餐',COMPLETED:'已完成',VOID:'已作废',CANCELLED:'已取消',REFUNDED:'已退款'};
+    let body = logs.length ? '<div style="position:relative;padding-left:20px">' + logs.map(l =>
+        '<div style="border-left:2px solid #ffd0d0;padding:0 0 16px 16px;position:relative">' +
+            '<i class="fas fa-circle" style="position:absolute;left:-6px;top:2px;color:var(--red);font-size:10px"></i>' +
+            '<div style="font-weight:700;font-size:14px">' + (nameMap[l.toStatus] || l.toStatus) + '</div>' +
+            '<div style="color:var(--text2);font-size:12.5px;margin:3px 0">' + formatDate(l.createTime) + ' · ' +
+            ({USER:'用户操作',ADMIN:'门店操作',SYSTEM:'系统自动'}[l.operator] || l.operator || '-') + '</div>' +
+            (l.remark ? '<div style="font-size:13px;color:#555">' + escHtml(l.remark) + '</div>' : '') +
+        '</div>').join('') + '</div>' : '<p style="color:var(--text2)">暂无流转记录</p>';
+    showConfirmModal('状态流转记录', body);
+}
+
+function showConfirmModal(title, bodyHtml) {
+    const id = 'tl' + Date.now();
+    const div = document.createElement('div');
+    div.className = 'modal-overlay show';
+    div.innerHTML = '<div class="modal" style="max-width:480px;width:92%;max-height:80vh;overflow:auto">' +
+        '<h3 style="margin-bottom:14px">' + title + '</h3>' + bodyHtml +
+        '<button class="btn btn-primary" style="width:100%;margin-top:10px" onclick="document.getElementById(\'' + id + '\').remove()">关闭</button></div>';
+    div.id = id;
+    div.onclick = (e) => { if (e.target === div) div.remove(); };
+    document.body.appendChild(div);
 }
 
 function selectPayMethod(method) { payMethod = method; document.querySelectorAll('.pay-opt').forEach(l => { var c = l.querySelector('input').value === method; l.style.borderColor = c ? 'var(--red)' : 'var(--border)'; l.style.background = c ? '#fff5f5' : ''; }); }
@@ -209,7 +310,7 @@ async function confirmPay() {
     if (data !== null) {
         payingOrderId = null;
         closePayModal();
-        showToast('支付成功');
+        showToast('支付成功，已进入排队');
         loadOrders(currentPage);
     }
 }
@@ -228,8 +329,17 @@ function refundOrder(id) {
     });
 }
 
+function confirmPickup(id) {
+    showConfirm('请确认您已取到餐品？', async () => {
+        const data = await api('/api/order/confirmPickup?orderId=' + id);
+        if (data !== null) { showToast('取餐成功，欢迎再次光临'); loadOrders(currentPage); }
+    });
+}
+
 renderSidebar();
 loadOrders(1);
+// 排队状态每 15 秒自动刷新，实时更新排队位置
+setInterval(() => { if (['','QUEUING','PREPARING','READY'].includes(currentStatus)) loadOrders(currentPage); }, 15000);
 </script>
 </body>
 </html>

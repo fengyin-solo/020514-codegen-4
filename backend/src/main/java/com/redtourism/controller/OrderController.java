@@ -81,4 +81,29 @@ public class OrderController {
     public Result<OrderInfo> detail(@RequestParam Long id) {
         return Result.success(orderService.getById(id));
     }
+
+    /** 用户确认取餐：待取餐 -> 已完成 */
+    @GetMapping("/confirmPickup")
+    public Result<String> confirmPickup(@RequestParam Long orderId, HttpSession session) {
+        User user = (User) session.getAttribute(Constants.SESSION_USER);
+        if (user == null) return Result.error(401, "请先登录");
+        orderService.confirmPickup(orderId, user.getId());
+        return Result.success("取餐成功，欢迎再次光临", null);
+    }
+
+    /** 订单状态流转时间线（每个状态的变更时间） */
+    @GetMapping("/statusLogs")
+    public Result<java.util.List<com.redtourism.entity.OrderStatusLog>> statusLogs(@RequestParam Long orderId) {
+        return Result.success(orderService.listStatusLogs(orderId));
+    }
+
+    /** 查询某门店当前订单的实时排队位置 */
+    @GetMapping("/queuePosition")
+    public Result<Integer> queuePosition(@RequestParam Long storeId,
+                                          @RequestParam Long orderId,
+                                          HttpSession session) {
+        User user = (User) session.getAttribute(Constants.SESSION_USER);
+        if (user == null) return Result.error(401, "请先登录");
+        return Result.success(orderService.getQueuePosition(storeId, orderId));
+    }
 }

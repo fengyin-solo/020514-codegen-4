@@ -37,3 +37,7 @@ mybatis-plus:
 
 upload:
   path: ./uploads/
+
+order:
+  # 待取餐超时（分钟），超时未取自动作废并注明原因
+  pickup-timeout-minutes: 30
